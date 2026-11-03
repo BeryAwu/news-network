@@ -1,0 +1,17 @@
+GPT LUNA — IMPLEMENT THIS PROJECT
+
+I am attaching a project handoff package named `news-network-luna-handoff`. Read `AGENT_INSTRUCTIONS.md` first, then every relevant specification file. These documents are the source of truth.
+
+Your job is to implement the News Network Management System end-to-end, not just make a mockup or write another plan. Start by inspecting the repository and reporting its current state. Then create a phase-based implementation plan tied to `ROADMAP.md` and begin coding. Work phase by phase, run tests/typecheck/lint/build, fix failures, and update `IMPLEMENTATION_STATUS.md` truthfully.
+
+Non-negotiable: all managed images must use CLOUDINARY. Use the official server-side Node SDK; never expose `CLOUDINARY_API_SECRET`; save Cloudinary public_id and asset metadata in PostgreSQL. Do not substitute S3 or local storage.
+
+Use Next.js + TypeScript + PostgreSQL + Prisma + Tailwind + shadcn/ui. The recommended initial design is one multi-tenant Next.js app serving 10–20 domains, with an architecture that can grow toward 50–100. Use Redis + BullMQ for background work when available. Do not silently decide unresolved items in `OPEN_DECISIONS.md`; use safe reversible defaults and record them, or ask me only when blocked.
+
+Required end-to-end workflow: admin creates a source brief with narrative and reference URLs → selects multiple media profiles → AI creates distinct, evidence-grounded article drafts → editor reviews each draft → editor can manually edit or request AI revision → reviewer approves individually or in a selected batch → publisher publishes selected approved articles independently to each target domain → dashboard shows per-domain success/failure and retry status.
+
+Do not fabricate claims, quotes, sources, bylines, journalists, or editorial independence. Different branding and editorial voices are fine, but publisher ownership and author identity must be truthful. Do not scrape Google Images or use images without reuse rights. Store approved/user-provided/AI-generated images in Cloudinary and retain provenance.
+
+Do not leave core functionality as fake data or inert buttons. If credentials are unavailable, implement a clear integration setup state and a test adapter; do not claim live production integration until tested with real credentials.
+
+Begin with repository inspection and implementation. Do not stop after the plan. At each milestone, tell me what was built, what was tested, and what remains.

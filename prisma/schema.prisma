@@ -1,0 +1,532 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  EDITOR
+  REVIEWER
+  PUBLISHER
+}
+
+enum MediaStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  DISABLED
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+enum BriefStatus {
+  DRAFT
+  READY
+  ARCHIVED
+}
+
+enum RetrievalStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  BLOCKED
+}
+
+enum SupportStatus {
+  SUPPORTED
+  CONFLICTED
+  UNVERIFIED
+}
+
+enum ArticleStatus {
+  DRAFT
+  GENERATING
+  NEEDS_REVIEW
+  IN_REVISION
+  APPROVED
+  REJECTED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  PUBLISH_FAILED
+  ARCHIVED
+}
+
+enum VersionChange {
+  INITIAL_AI
+  MANUAL_EDIT
+  AI_REVISION
+  RESTORE
+}
+
+enum ReviewDecision {
+  APPROVED
+  REJECTED
+  NEEDS_CHANGES
+}
+
+enum AssetProvider {
+  CLOUDINARY
+}
+
+enum LicenseType {
+  USER_PROVIDED
+  CC0
+  CC_BY
+  CC_BY_SA
+  PUBLIC_DOMAIN
+  AI_GENERATED
+  OTHER
+}
+
+enum PublicationStatus {
+  QUEUED
+  SCHEDULED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum AttemptStatus {
+  SUCCEEDED
+  FAILED
+}
+
+enum AiOperation {
+  GENERATE_ARTICLE
+  REVISE_ARTICLE
+  SUMMARIZE_SOURCE
+}
+
+enum RunStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model User {
+  id                 String              @id @default(cuid())
+  name               String
+  email              String              @unique
+  passwordHash       String
+  status             UserStatus          @default(ACTIVE)
+  lastLoginAt        DateTime?           @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @db.Timestamptz(3)
+  roles              UserRole[]
+  mediaScopes        MediaAccess[]
+  briefs             SourceBrief[]
+  articles           Article[]           @relation("ArticleCreator")
+  versions           ArticleVersion[]
+  reviews            EditorialReview[]
+  assets             Asset[]
+  publicationTargets PublicationTarget[]
+  audits             AuditLog[]
+}
+
+model UserRole {
+  userId String
+  role   Role
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@index([role])
+}
+
+model MediaAccess {
+  userId      String
+  mediaSiteId String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaSite   MediaSite @relation(fields: [mediaSiteId], references: [id], onDelete: Cascade)
+
+  @@id([userId, mediaSiteId])
+  @@index([mediaSiteId])
+}
+
+model MediaSite {
+  id                  String              @id @default(cuid())
+  name                String
+  slug                String              @unique
+  displayName         String
+  description         String              @default("")
+  status              MediaStatus         @default(DRAFT)
+  defaultLocale       String              @default("id-ID")
+  timezone            String              @default("Asia/Jakarta")
+  themeConfig         Json                @default("{}")
+  publisherDisclosure String              @default("")
+  ownershipDisclosure String              @default("")
+  newsroomByline      String              @default("Redaksi")
+  createdAt           DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime            @updatedAt @db.Timestamptz(3)
+  domains             Domain[]
+  profile             MediaProfile?
+  categories          Category[]
+  articles            Article[]
+  assets              Asset[]
+  mediaScopes         MediaAccess[]
+  briefs              SourceBriefMedia[]
+  publicationTargets  PublicationTarget[]
+  audits              AuditLog[]
+
+  @@index([status, createdAt])
+}
+
+model Domain {
+  id                    String              @id @default(cuid())
+  mediaSiteId           String
+  hostname              String              @unique
+  isCanonical           Boolean             @default(false)
+  isActive              Boolean             @default(false)
+  verificationStatus    VerificationStatus  @default(PENDING)
+  verificationMethod    String              @default("manual")
+  verificationTokenHash String?
+  verifiedAt            DateTime?           @db.Timestamptz(3)
+  createdAt             DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime            @updatedAt @db.Timestamptz(3)
+  mediaSite             MediaSite           @relation(fields: [mediaSiteId], references: [id], onDelete: Cascade)
+  publicationTargets    PublicationTarget[]
+
+  @@index([mediaSiteId, isActive, verificationStatus])
+}
+
+model MediaProfile {
+  id                    String    @id @default(cuid())
+  mediaSiteId           String    @unique
+  niche                 String    @default("")
+  targetAudience        String    @default("")
+  editorialMission      String    @default("")
+  toneGuidelines        String    @default("")
+  styleGuidelines       String    @default("")
+  headlineGuidelines    String    @default("")
+  language              String    @default("Indonesian")
+  preferredWordCountMin Int       @default(350)
+  preferredWordCountMax Int       @default(700)
+  seoGuidelines         String    @default("")
+  forbiddenClaims       String    @default("")
+  requiredDisclosures   String    @default("")
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+  mediaSite             MediaSite @relation(fields: [mediaSiteId], references: [id], onDelete: Cascade)
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  mediaSiteId String
+  name        String
+  slug        String
+  description String    @default("")
+  isActive    Boolean   @default(true)
+  sortOrder   Int       @default(0)
+  mediaSite   MediaSite @relation(fields: [mediaSiteId], references: [id], onDelete: Cascade)
+  articles    Article[]
+
+  @@unique([mediaSiteId, slug])
+  @@index([mediaSiteId, isActive, sortOrder])
+}
+
+model SourceBrief {
+  id            String             @id @default(cuid())
+  createdById   String
+  workingTitle  String
+  narrative     String             @db.Text
+  editorNotes   String             @default("") @db.Text
+  status        BriefStatus        @default(DRAFT)
+  sourceSummary String?            @db.Text
+  archivedAt    DateTime?          @db.Timestamptz(3)
+  createdAt     DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime           @updatedAt @db.Timestamptz(3)
+  createdBy     User               @relation(fields: [createdById], references: [id])
+  references    SourceReference[]
+  facts         SourceFact[]
+  mediaTargets  SourceBriefMedia[]
+  articles      Article[]
+  aiRuns        AiGenerationRun[]
+
+  @@index([createdAt, status])
+}
+
+model SourceBriefMedia {
+  sourceBriefId String
+  mediaSiteId   String
+  sourceBrief   SourceBrief @relation(fields: [sourceBriefId], references: [id], onDelete: Cascade)
+  mediaSite     MediaSite   @relation(fields: [mediaSiteId], references: [id], onDelete: Cascade)
+
+  @@id([sourceBriefId, mediaSiteId])
+  @@index([mediaSiteId])
+}
+
+model SourceReference {
+  id              String          @id @default(cuid())
+  sourceBriefId   String
+  url             String          @db.Text
+  canonicalUrl    String?         @db.Text
+  title           String          @default("")
+  publisherName   String          @default("")
+  publishedAt     DateTime?       @db.Timestamptz(3)
+  retrievalStatus RetrievalStatus @default(PENDING)
+  retrievedAt     DateTime?       @db.Timestamptz(3)
+  httpStatus      Int?
+  errorCode       String?
+  excerpt         String?         @db.Text
+  contentHash     String?
+  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
+  sourceBrief     SourceBrief     @relation(fields: [sourceBriefId], references: [id], onDelete: Cascade)
+  facts           SourceFact[]
+
+  @@index([sourceBriefId, retrievalStatus])
+}
+
+model SourceFact {
+  id                String           @id @default(cuid())
+  sourceBriefId     String
+  sourceReferenceId String?
+  claimText         String           @db.Text
+  supportStatus     SupportStatus    @default(UNVERIFIED)
+  evidenceNote      String           @default("") @db.Text
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  sourceBrief       SourceBrief      @relation(fields: [sourceBriefId], references: [id], onDelete: Cascade)
+  sourceReference   SourceReference? @relation(fields: [sourceReferenceId], references: [id], onDelete: SetNull)
+
+  @@index([sourceBriefId, supportStatus])
+}
+
+model Article {
+  id                 String              @id @default(cuid())
+  mediaSiteId        String
+  sourceBriefId      String
+  categoryId         String?
+  createdById        String
+  featuredAssetId    String?
+  title              String
+  slug               String
+  excerpt            String              @default("") @db.Text
+  body               String              @db.Text
+  seoTitle           String              @default("")
+  metaDescription    String              @default("") @db.Text
+  tags               String[]            @default([])
+  imageBrief         String              @default("") @db.Text
+  claimsUsed         Json                @default("[]")
+  uncertainties      Json                @default("[]")
+  status             ArticleStatus       @default(DRAFT)
+  versionNumber      Int                 @default(1)
+  approvedById       String?
+  approvedAt         DateTime?           @db.Timestamptz(3)
+  publishedAt        DateTime?           @db.Timestamptz(3)
+  archivedAt         DateTime?           @db.Timestamptz(3)
+  createdAt          DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime            @updatedAt @db.Timestamptz(3)
+  mediaSite          MediaSite           @relation(fields: [mediaSiteId], references: [id])
+  sourceBrief        SourceBrief         @relation(fields: [sourceBriefId], references: [id])
+  category           Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdBy          User                @relation("ArticleCreator", fields: [createdById], references: [id])
+  featuredAsset      Asset?              @relation("FeaturedAsset", fields: [featuredAssetId], references: [id], onDelete: SetNull)
+  versions           ArticleVersion[]
+  reviews            EditorialReview[]
+  publicationTargets PublicationTarget[]
+  aiRuns             AiGenerationRun[]
+
+  @@unique([mediaSiteId, slug])
+  @@index([mediaSiteId, status, createdAt])
+  @@index([sourceBriefId])
+}
+
+model ArticleVersion {
+  id                 String              @id @default(cuid())
+  articleId          String
+  versionNumber      Int
+  title              String
+  slug               String
+  excerpt            String              @db.Text
+  body               String              @db.Text
+  seoTitle           String
+  metaDescription    String              @db.Text
+  tags               String[]            @default([])
+  imageBrief         String              @default("") @db.Text
+  categoryId         String?
+  featuredAssetId    String?
+  changeType         VersionChange
+  changeInstruction  String?             @db.Text
+  createdById        String?
+  aiProvider         String?
+  aiModel            String?
+  promptVersion      String?
+  changeSummary      String              @default("") @db.Text
+  claimsUsed         Json                @default("[]")
+  uncertainties      Json                @default("[]")
+  createdAt          DateTime            @default(now()) @db.Timestamptz(3)
+  article            Article             @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  createdBy          User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  publicationTargets PublicationTarget[]
+
+  @@unique([articleId, versionNumber])
+  @@index([articleId, createdAt])
+}
+
+model EditorialReview {
+  id               String         @id @default(cuid())
+  articleId        String
+  articleVersionId String?
+  reviewerId       String
+  decision         ReviewDecision
+  notes            String         @default("") @db.Text
+  evidenceSnapshot Json           @default("{}")
+  createdAt        DateTime       @default(now()) @db.Timestamptz(3)
+  article          Article        @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  reviewer         User           @relation(fields: [reviewerId], references: [id])
+
+  @@index([articleId, createdAt])
+}
+
+model Asset {
+  id                   String             @id @default(cuid())
+  mediaSiteId          String?
+  provider             AssetProvider      @default(CLOUDINARY)
+  cloudinaryPublicId   String             @unique
+  secureUrl            String             @db.Text
+  resourceType         String
+  format               String
+  width                Int
+  height               Int
+  bytes                Int
+  etag                 String?
+  cloudinaryVersion    Int?
+  originalFilename     String
+  altText              String             @default("")
+  caption              String             @default("") @db.Text
+  credit               String             @default("")
+  sourceUrl            String?            @db.Text
+  sourcePublisher      String             @default("")
+  licenseType          LicenseType        @default(USER_PROVIDED)
+  licenseUrl           String?            @db.Text
+  attributionText      String             @default("") @db.Text
+  isAiGenerated        Boolean            @default(false)
+  generationPrompt     String?            @db.Text
+  createdById          String
+  createdAt            DateTime           @default(now()) @db.Timestamptz(3)
+  deletedAt            DateTime?          @db.Timestamptz(3)
+  mediaSite            MediaSite?         @relation(fields: [mediaSiteId], references: [id], onDelete: SetNull)
+  createdBy            User               @relation(fields: [createdById], references: [id])
+  featuredArticles     Article[]          @relation("FeaturedAsset")
+  publicationSnapshots PublicationAsset[]
+
+  @@index([mediaSiteId, deletedAt, createdAt])
+}
+
+model PublicationTarget {
+  id               String               @id @default(cuid())
+  articleId        String
+  mediaSiteId      String
+  domainId         String
+  articleVersionId String
+  approvedSnapshot Json
+  status           PublicationStatus    @default(QUEUED)
+  scheduledAt      DateTime?            @db.Timestamptz(3)
+  publishedAt      DateTime?            @db.Timestamptz(3)
+  remoteArticleId  String?
+  remoteUrl        String?              @db.Text
+  idempotencyKey   String               @unique
+  lastErrorCode    String?
+  lastErrorMessage String?              @db.Text
+  attemptCount     Int                  @default(0)
+  createdById      String
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime             @updatedAt @db.Timestamptz(3)
+  article          Article              @relation(fields: [articleId], references: [id])
+  mediaSite        MediaSite            @relation(fields: [mediaSiteId], references: [id])
+  domain           Domain               @relation(fields: [domainId], references: [id])
+  articleVersion   ArticleVersion       @relation(fields: [articleVersionId], references: [id])
+  createdBy        User                 @relation(fields: [createdById], references: [id])
+  attempts         PublicationAttempt[]
+  assets           PublicationAsset[]
+
+  @@index([mediaSiteId, status, scheduledAt])
+  @@index([articleId, createdAt])
+}
+
+model PublicationAsset {
+  publicationTargetId String
+  assetId             String
+  role                String            @default("FEATURED")
+  createdAt           DateTime          @default(now()) @db.Timestamptz(3)
+  publicationTarget   PublicationTarget @relation(fields: [publicationTargetId], references: [id], onDelete: Cascade)
+  asset               Asset             @relation(fields: [assetId], references: [id])
+
+  @@id([publicationTargetId, assetId, role])
+  @@index([assetId])
+}
+
+model PublicationAttempt {
+  id                  String            @id @default(cuid())
+  publicationTargetId String
+  attemptNumber       Int
+  startedAt           DateTime          @default(now()) @db.Timestamptz(3)
+  finishedAt          DateTime?         @db.Timestamptz(3)
+  resultStatus        AttemptStatus
+  httpStatus          Int?
+  responseSummary     String            @default("") @db.Text
+  errorCode           String?
+  errorMessage        String?           @db.Text
+  correlationId       String
+  publicationTarget   PublicationTarget @relation(fields: [publicationTargetId], references: [id], onDelete: Cascade)
+
+  @@unique([publicationTargetId, attemptNumber])
+  @@index([publicationTargetId, startedAt])
+}
+
+model AiGenerationRun {
+  id            String      @id @default(cuid())
+  sourceBriefId String
+  articleId     String?
+  mediaSiteId   String?
+  operation     AiOperation
+  provider      String
+  model         String
+  promptVersion String
+  status        RunStatus   @default(PENDING)
+  inputHash     String
+  outputSummary String      @default("") @db.Text
+  inputTokens   Int?
+  outputTokens  Int?
+  estimatedCost Decimal?    @db.Decimal(12, 6)
+  latencyMs     Int?
+  errorCode     String?
+  errorMessage  String?     @db.Text
+  createdById   String
+  createdAt     DateTime    @default(now()) @db.Timestamptz(3)
+  completedAt   DateTime?   @db.Timestamptz(3)
+  sourceBrief   SourceBrief @relation(fields: [sourceBriefId], references: [id], onDelete: Cascade)
+  article       Article?    @relation(fields: [articleId], references: [id], onDelete: SetNull)
+
+  @@index([sourceBriefId, createdAt])
+}
+
+model AuditLog {
+  id          String     @id @default(cuid())
+  actorUserId String?
+  mediaSiteId String?
+  action      String
+  entityType  String
+  entityId    String
+  metadata    Json       @default("{}")
+  createdAt   DateTime   @default(now()) @db.Timestamptz(3)
+  actor       User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  mediaSite   MediaSite? @relation(fields: [mediaSiteId], references: [id], onDelete: SetNull)
+
+  @@index([mediaSiteId, createdAt])
+  @@index([entityType, entityId, createdAt])
+}
