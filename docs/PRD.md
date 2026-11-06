@@ -25,7 +25,7 @@ Managing multiple news domains independently creates repetitive work: entering t
 
 1. Manage many domains from one authenticated dashboard.
 2. Maintain a distinct, truthful media profile for each site.
-3. Turn supplied narratives and reference URLs into source-grounded article drafts.
+3. Turn supplied narratives and reference URLs into source-grounded article drafts, and support topic-only drafting as an explicitly unverified writing aid that requires evidence and human fact-checking before approval.
 4. Generate genuinely differentiated articles based on relevant audience angles and editorial profiles.
 5. Support both manual editing and AI-assisted revision.
 6. Support individual review and bulk approval of explicitly selected articles.
@@ -54,7 +54,7 @@ Managing multiple news domains independently creates repetitive work: entering t
 | Reviewer | Review content, leave notes, approve or reject assigned articles |
 | Publisher / Operator | Publish approved articles, schedule, retry failed jobs, and monitor publishing |
 
-Role assignments and media scope must be enforced server-side. The final role model is configurable and still needs owner confirmation.
+Role assignments and media scope are enforced server-side. The current implementation uses OWNER, ADMIN, EDITOR, REVIEWER, and PUBLISHER; changes to this role model remain a product decision.
 
 ## 7. Core user journeys
 
@@ -65,8 +65,8 @@ Role assignments and media scope must be enforced server-side. The final role mo
 4. System tests hostname routing and displays connection status.
 
 ### 7.2 Create a source brief and generate articles
-1. Editor enters a topic/headline, narrative/context, optional notes, and one or more reference URLs/documents.
-2. System validates and fetches permitted public references, records their metadata, and provides a source summary.
+1. Editor enters a topic/headline, with optional narrative/context, notes, and reference URLs. Narrative and references may be omitted when starting a topic-only draft; that mode creates an unverified editorial writing draft, not independently reported or fact-verified news. Specific current facts, dates, numbers, quotations, named sources, and attributions still require supplied evidence and human verification.
+2. When references are supplied, the system validates and fetches permitted public references and records their metadata/status. Reference retrieval does not itself verify the truth of claims.
 3. Editor selects target media sites.
 4. AI creates one distinct draft per selected media profile, grounded in the same verified source facts.
 5. Each output is independently saved with its source brief, selected media, generation metadata, and status.
@@ -82,7 +82,7 @@ Role assignments and media scope must be enforced server-side. The final role mo
 ### 7.4 Publish
 1. Publisher selects approved articles and immediate or scheduled publication time.
 2. System creates one independent publication job per article/site target.
-3. Worker publishes via the site's publishing adapter/API.
+3. Worker publishes via the site's publishing adapter/API. **Current implementation:** immediate publishing runs inline in the request path; the Redis/BullMQ worker entry point exists but has not been verified in the local environment, so scheduled/background execution is not yet operational there.
 4. System records request ID, attempts, timestamps, response, remote article ID/URL, and outcome.
 5. Failed jobs may be retried safely without creating duplicate public articles.
 

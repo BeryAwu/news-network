@@ -1,8 +1,8 @@
 # News Network Management System (NNMS)
 
-**Project handoff package for GPT Luna / AI coding agent**  
+**Project documentation package for the News Network Management System**  
 Prepared: 3 November 2026  
-Status: Product blueprint / implementation-ready planning package (not yet an implemented application)
+Status: Product and governance reference. The application is implemented; see [`IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md) for current code, verification, test data, and external blockers.
 
 ## Start here
 
@@ -12,9 +12,9 @@ Status: Product blueprint / implementation-ready planning package (not yet an im
 4. Execute `ROADMAP.md` phase by phase and use `ACCEPTANCE_CRITERIA.md` as the completion checklist.
 5. Copy `.env.example` to `.env.local` and fill credentials locally. Never commit real secrets.
 
-## What is being built
+## What the application currently implements
 
-A centralized platform to manage a network of independently branded news websites. An authenticated central dashboard manages media sites/domains, source briefs, AI-assisted article drafts, human editorial review, revisions, publishing jobs, image assets, and monitoring.
+A centralized platform to manage multiple media profiles and verified-host public rendering. The authenticated dashboard manages media/domains, briefs, source references and fact records, AI-assisted drafts (from supplied material or a topic-only starting point), human editorial review and version history, Cloudinary asset metadata, per-domain publication targets, and monitoring. Current implementation evidence and production blockers are tracked in [`IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md); this package remains the product/governance reference, not a claim that every planned capability is production-ready.
 
 A single source brief can produce distinct, fact-consistent article drafts for selected media profiles. An editor can revise each article manually or ask AI to revise it, review individual items, approve selected items in bulk, and publish only the selected approved articles.
 

@@ -17,6 +17,8 @@ You are the lead product engineer responsible for implementing the **News Networ
 
 ## How to work
 
+Before planning changes, read the current `IMPLEMENTATION_STATUS.md` and relevant code. These handoff documents describe product requirements and future targets; they are not proof that each feature is still unimplemented or production-verified. Keep implementation, local smoke evidence, and external production gates distinct when updating status.
+
 1. Inspect the existing repository before changing anything. Identify framework version, package manager, scripts, existing components, database state, and deployment assumptions.
 2. Do not overwrite working code, configuration, or user data without understanding the impact. Preserve existing conventions when reasonable.
 3. If no repository exists, scaffold the project with the chosen stack and document all setup commands.
@@ -35,7 +37,7 @@ You are the lead product engineer responsible for implementing the **News Networ
 - The image storage provider is **Cloudinary**. It is mandatory. Never replace it with S3, local filesystem storage, Firebase Storage, or another provider without explicit approval from the project owner.
 - Public media sites use Next.js.
 - Preferred core stack: Next.js + TypeScript + PostgreSQL + Prisma + Tailwind CSS + shadcn/ui.
-- The recommended default is one multi-tenant Next.js application serving multiple verified domains, plus a separate authenticated central dashboard. Keep the media frontend separable behind APIs/adapters if a future site needs its own deployment.
+- The recommended default is one multi-tenant Next.js application serving the authenticated central dashboard and the verified public media domains. Keep the media frontend separable behind APIs/adapters if a future site needs its own deployment.
 - Initial target is 10–20 domains; the design should be able to scale toward 50–100 domains.
 - Article production target is still ambiguous; do not assume it means per domain. Ask or record a provisional capacity assumption.
 - One source brief can produce distinct drafts for selected media profiles. Keep source facts consistent. Do not generate superficial paraphrase variants just to evade duplicate detection or search policies.

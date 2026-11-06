@@ -1,14 +1,17 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { audit, hasNetworkWideScope, requireRole, requireMediaAccess, requireSameOrigin } from "@/lib/auth";
-import { jsonError } from "@/lib/http";
+import { audit, hasNetworkWideScope, requireMediaAccess, requireRole, requireSameOrigin } from "@/lib/auth";
+import { boundedPage, jsonError } from "@/lib/http";
 import { fetchReference } from "@/lib/ingest";
-const briefInput = z.object({ workingTitle: z.string().min(5).max(200), narrative: z.string().min(20).max(20000), editorNotes: z.string().max(5000).default(""), references: z.array(z.string().max(2000)).max(10).default([]), mediaSiteIds: z.array(z.string().min(1)).min(1).max(20) });
-const updateSchema = z.object({ action: z.enum(["edit", "archive"]), briefId: z.string().min(1), workingTitle: z.string().min(5).max(200).optional(), narrative: z.string().min(20).max(20000).optional(), editorNotes: z.string().max(5000).optional() });
+import { rateLimit } from "@/lib/rate-limit";
+const briefInput = z.object({ workingTitle: z.string().min(5).max(200), narrative: z.string().max(20000).default(""), editorNotes: z.string().max(5000).default(""), references: z.array(z.string().max(2000)).max(10).default([]), mediaSiteIds: z.array(z.string().min(1)).min(1).max(20) });
+const updateSchema = z.object({ action: z.enum(["edit", "archive"]), briefId: z.string().min(1), workingTitle: z.string().min(5).max(200).optional(), narrative: z.string().max(20000).optional(), editorNotes: z.string().max(5000).optional() });
 const referenceSchema = z.object({ action: z.enum(["add-reference", "remove-reference"]), briefId: z.string().min(1), referenceId: z.string().optional(), url: z.string().url().max(2000).optional() });
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const user = await requireRole("OWNER", "ADMIN", "EDITOR", "REVIEWER", "PUBLISHER");
+    const params = new URL(request.url).searchParams;
+    const page = boundedPage(params.get("page"));
     const isOwner = await hasNetworkWideScope(user.id);
     const briefs = await db.sourceBrief.findMany({
       where: {
@@ -16,7 +19,7 @@ export async function GET() {
         ...(isOwner ? {} : { mediaTargets: { some: { mediaSite: { mediaScopes: { some: { userId: user.id } } } } } })
       },
       include: { references: true, facts: { include: { sourceReference: { select: { id: true, url: true, title: true } } }, orderBy: { createdAt: "asc" } }, mediaTargets: { include: { mediaSite: { select: { id: true, displayName: true } } } }, _count: { select: { articles: true } } },
-      orderBy: { updatedAt: "desc" }
+      orderBy: { updatedAt: "desc" }, skip: (page - 1) * 100, take: 100
     });
     return Response.json(briefs);
   } catch (error) { return jsonError(error); }
@@ -74,6 +77,7 @@ export async function POST(request: Request) {
     requireSameOrigin(request);
     const user = await requireRole("OWNER", "ADMIN", "EDITOR");
     const input = briefInput.parse(await request.json());
+    if (!rateLimit(`ingest:${user.id}`, 20, 60 * 1000)) return Response.json({ error: "Terlalu banyak pengambilan sumber. Tunggu sebentar." }, { status: 429 });
     const targets = await db.mediaSite.findMany({ where: { id: { in: input.mediaSiteIds }, status: { in: ["ACTIVE", "DRAFT"] } }, select: { id: true } });
     if (targets.length !== new Set(input.mediaSiteIds).size) return Response.json({ error: "One or more media targets are unavailable." }, { status: 400 });
     for (const target of targets) await requireMediaAccess(user.id, target.id);

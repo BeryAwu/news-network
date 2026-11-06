@@ -107,6 +107,8 @@ If a signed browser upload is used, the browser receives only the signature and 
 
 ## 10. Cloudinary test checklist
 
+The server-side integration code is implemented. In the current local environment, Cloudinary credentials passed an authenticated account ping, but a real image upload has not been tested; keep that acceptance item open until a rights-cleared test image is uploaded and its stored metadata is checked.
+
 - [ ] Missing credentials show a clear setup warning, not a silent mock success.
 - [ ] Authenticated upload works in a real Cloudinary test account.
 - [ ] Wrong media scope is rejected.

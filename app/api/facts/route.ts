@@ -1,16 +1,18 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { audit, requireMediaAccess, requireRole, requireSameOrigin } from "@/lib/auth";
-import { jsonError } from "@/lib/http";
+import { boundedPage, jsonError } from "@/lib/http";
 const createSchema = z.object({ sourceBriefId: z.string().min(1), sourceReferenceId: z.string().min(1).optional(), claimText: z.string().trim().min(8).max(1000), supportStatus: z.enum(["SUPPORTED", "CONFLICTED", "UNVERIFIED"]).default("UNVERIFIED"), evidenceNote: z.string().max(2000).default("") });
 export async function GET(request: Request) {
   try {
     const user = await requireRole("OWNER", "ADMIN", "EDITOR", "REVIEWER", "PUBLISHER");
-    const sourceBriefId = z.string().min(1).parse(new URL(request.url).searchParams.get("sourceBriefId"));
+    const url = new URL(request.url);
+    const sourceBriefId = z.string().min(1).parse(url.searchParams.get("sourceBriefId"));
+    const page = boundedPage(url.searchParams.get("page"));
     const brief = await db.sourceBrief.findUnique({ where: { id: sourceBriefId }, include: { mediaTargets: true } });
     if (!brief) return Response.json({ error: "Source brief not found." }, { status: 404 });
     for (const target of brief.mediaTargets) await requireMediaAccess(user.id, target.mediaSiteId);
-    const facts = await db.sourceFact.findMany({ where: { sourceBriefId }, include: { sourceReference: { select: { id: true, url: true, title: true, publisherName: true, retrievalStatus: true } } }, orderBy: { createdAt: "asc" } });
+    const facts = await db.sourceFact.findMany({ where: { sourceBriefId }, include: { sourceReference: { select: { id: true, url: true, title: true, publisherName: true, retrievalStatus: true } } }, orderBy: { createdAt: "asc" }, skip: (page - 1) * 200, take: 200 });
     return Response.json(facts);
   } catch (error) { return jsonError(error); }
 }
@@ -45,6 +47,16 @@ export async function DELETE(request: Request) {
         FROM "ArticleVersion" AS version
         CROSS JOIN LATERAL jsonb_array_elements(
           CASE WHEN jsonb_typeof(version."claimsUsed") = 'array' THEN version."claimsUsed" ELSE '[]'::jsonb END
+        ) AS claims(claim)
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(claims.claim -> 'sourceFactIds') = 'array' THEN claims.claim -> 'sourceFactIds' ELSE '[]'::jsonb END
+        ) AS cited_facts(fact_id)
+        WHERE cited_facts.fact_id = ${existing.id}
+        UNION ALL
+        SELECT 1
+        FROM "Article" AS article
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE WHEN jsonb_typeof(article."claimsUsed") = 'array' THEN article."claimsUsed" ELSE '[]'::jsonb END
         ) AS claims(claim)
         CROSS JOIN LATERAL jsonb_array_elements_text(
           CASE WHEN jsonb_typeof(claims.claim -> 'sourceFactIds') = 'array' THEN claims.claim -> 'sourceFactIds' ELSE '[]'::jsonb END

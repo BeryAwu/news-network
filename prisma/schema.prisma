@@ -183,6 +183,7 @@ model MediaSite {
   briefs              SourceBriefMedia[]
   publicationTargets  PublicationTarget[]
   audits              AuditLog[]
+  writingSkills       MediaWritingSkill[]
 
   @@index([status, createdAt])
 }
@@ -237,6 +238,31 @@ model Category {
 
   @@unique([mediaSiteId, slug])
   @@index([mediaSiteId, isActive, sortOrder])
+}
+
+model WritingSkill {
+  id             String            @id @default(cuid())
+  slug           String            @unique
+  name           String
+  description    String            @default("")
+  promptGuidance String            @db.Text
+  isActive       Boolean           @default(true)
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @db.Timestamptz(3)
+  mediaSites     MediaWritingSkill[]
+
+  @@index([isActive])
+}
+
+model MediaWritingSkill {
+  mediaSiteId  String
+  skillId      String
+  enabled      Boolean   @default(false)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  mediaSite    MediaSite @relation(fields: [mediaSiteId], references: [id], onDelete: Cascade)
+  skill        WritingSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([mediaSiteId, skillId])
 }
 
 model SourceBrief {

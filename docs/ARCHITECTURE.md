@@ -50,7 +50,7 @@ Keep publishing APIs and site rendering boundaries modular so that a media site 
 6. Unknown, disabled, pending-verification, or unmapped domains return a neutral 404/maintenance page. Never default to another site's content.
 7. Do not trust a tenant ID supplied by a browser form or query string. Derive it from authenticated permissions or trusted hostname resolution.
 
-Use current Next.js multi-tenant routing guidance as a reference, but confirm behavior against the installed Next.js version. Avoid depending on deprecated middleware conventions if the installed version uses a different request interception model.
+Current code resolves tenants in the App Router using the request host and database domain records. Use current Next.js multi-tenant routing guidance as a reference for future changes, but confirm behavior against the installed Next.js version. Avoid depending on deprecated middleware conventions if the installed version uses a different request interception model. See `IMPLEMENTATION_STATUS.md` for verified current behavior and production readiness; this document also describes future hardening and deployment options.
 
 ## 4. Domain model and custom domains
 
@@ -71,7 +71,9 @@ Use current Next.js multi-tenant routing guidance as a reference, but confirm be
 
 ## 6. Background jobs
 
-Use Redis + BullMQ as the default job layer if a managed Redis-compatible service is available.
+**Current implementation:** immediate publication can run inline; Redis/BullMQ support and a worker entry point are available for background/scheduled work. A Redis service and worker have not been verified in the current local environment, so saved schedules must not be described as executing automatically there. AI generation currently runs in the request path rather than as a verified background queue.
+
+Use Redis + BullMQ as the job layer when a managed Redis-compatible service is available.
 
 Suggested queues:
 - `source-ingestion`

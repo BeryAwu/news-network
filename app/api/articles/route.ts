@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { hasNetworkWideScope, requireMediaAccess, requireRole, requireSameOrigin } from "@/lib/auth";
-import { jsonError } from "@/lib/http";
-import { generateDraft, IntegrationNotConfigured } from "@/lib/ai";
+import { boundedPage, jsonError } from "@/lib/http";
+import { DraftEvidenceValidationError, generateDraft, IntegrationNotConfigured, PROMPT_VERSION } from "@/lib/ai";
 import { slugify } from "@/lib/security";
 import { createEditorialEvidenceSnapshot } from "@/lib/editorial-evidence";
+import { rateLimit } from "@/lib/rate-limit";
+import { enabledWritingGuidance } from "@/lib/writing-skills";
 
 const statusSchema = z.enum(["DRAFT", "GENERATING", "NEEDS_REVIEW", "IN_REVISION", "APPROVED", "REJECTED", "SCHEDULED", "PUBLISHING", "PUBLISHED", "PUBLISH_FAILED", "ARCHIVED"]);
 const savedArticleFacts = z.object({ claimsUsed: z.array(z.object({ claimText: z.string().min(1), sourceFactIds: z.array(z.string()) })), uncertainties: z.array(z.string()) });
@@ -32,6 +34,9 @@ export async function GET(request: Request) {
     const status = params.get("status");
     if (mediaSiteId) await requireMediaAccess(user.id, mediaSiteId);
     const isOwner = await hasNetworkWideScope(user.id);
+    const rawLimit = Number(params.get("limit"));
+    const limit = Math.min(Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100, 200);
+    const page = boundedPage(params.get("page"));
     const articles = await db.article.findMany({
       where: {
         ...(mediaSiteId ? { mediaSiteId } : isOwner ? {} : { mediaSite: { mediaScopes: { some: { userId: user.id } } } }),
@@ -41,8 +46,8 @@ export async function GET(request: Request) {
         mediaSite: { select: { id: true, displayName: true, slug: true, newsroomByline: true } },
         sourceBrief: { select: { id: true, workingTitle: true, references: true, facts: true } }, featuredAsset: true,
         versions: { orderBy: { versionNumber: "desc" }, take: 10 }, reviews: { orderBy: { createdAt: "desc" }, take: 3 },
-        publicationTargets: { orderBy: { createdAt: "desc" } }
-      }, orderBy: { updatedAt: "desc" }
+        publicationTargets: { orderBy: { createdAt: "desc" }, take: 20 }
+      }, orderBy: { updatedAt: "desc" }, skip: (page - 1) * limit, take: limit
     });
     return Response.json(articles);
   } catch (error) { return jsonError(error); }
@@ -56,6 +61,9 @@ export async function POST(request: Request) {
     const user = input.action === "review" || input.action === "bulk-approve"
       ? await requireRole("OWNER", "ADMIN", "REVIEWER")
       : await requireRole("OWNER", "ADMIN", "EDITOR");
+    if (input.action === "generate" || input.action === "revise") {
+      if (!rateLimit(`ai:${user.id}`, 6, 60 * 1000)) return Response.json({ error: "Terlalu banyak permintaan AI. Tunggu sebentar sebelum mencoba lagi." }, { status: 429 });
+    }
 
     if (input.action === "generate") {
       const brief = await db.sourceBrief.findUnique({
@@ -78,13 +86,14 @@ export async function POST(request: Request) {
       if (!brief || brief.archivedAt) return Response.json({ error: "Source brief not found." }, { status: 404 });
       for (const target of brief.mediaTargets) await requireMediaAccess(user.id, target.mediaSiteId);
       const outcomes = await Promise.all(brief.mediaTargets.map(async ({ mediaSiteId, mediaSite }) => {
-        const existing = await db.article.findFirst({ where: { sourceBriefId: brief.id, mediaSiteId }, select: { id: true, title: true, status: true } });
+        const existing = await db.article.findFirst({ where: { sourceBriefId: brief.id, mediaSiteId, status: { notIn: ["ARCHIVED", "REJECTED"] } }, select: { id: true, title: true, status: true } });
         if (existing) return { mediaSiteId, articleId: existing.id, title: existing.title, status: existing.status, reusedExisting: true };
         let provider = process.env.AI_PROVIDER || "unconfigured";
         let model = process.env.AI_MODEL || "unconfigured";
         try {
           const profile = mediaSite.profile ?? { niche: "", targetAudience: "", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 };
-          const result = await generateDraft(brief, { ...mediaSite, profile, categories: mediaSite.categories });
+          const guidance = await enabledWritingGuidance(db, mediaSiteId);
+          const result = await generateDraft(brief, { ...mediaSite, profile, categories: mediaSite.categories }, undefined, undefined, guidance);
           provider = result.provider; model = result.model || "unknown";
           const category = mediaSite.categories.find((item) => item.name.toLowerCase() === result.draft.suggestedCategory.toLowerCase());
           const slug = `${slugify(result.draft.slugSuggestion || result.draft.title)}-${mediaSiteId.slice(-6)}-${brief.id.slice(-6)}`.slice(0, 120);
@@ -121,20 +130,21 @@ export async function POST(request: Request) {
           if (error instanceof IntegrationNotConfigured) return { mediaSiteId, status: "NOT_CONFIGURED", error: error.message };
           await db.aiGenerationRun.create({ data: {
             sourceBriefId: brief.id, mediaSiteId, operation: "GENERATE_ARTICLE", provider, model,
-            promptVersion: "news-draft-id-v1", status: "FAILED", inputHash: `${brief.id}:${mediaSiteId}`,
+            promptVersion: PROMPT_VERSION, status: "FAILED", inputHash: `${brief.id}:${mediaSiteId}`,
             errorCode: "GENERATION_FAILED", errorMessage: error instanceof Error ? error.message.slice(0, 1000) : "Unknown generation error",
             createdById: user.id, completedAt: new Date()
           } });
           return { mediaSiteId, status: "FAILED", error: error instanceof Error ? error.message : "Generation failed." };
         }
       }));
-      return Response.json({ outcomes }, { status: 201 });
+      const createdAny = outcomes.some((outcome) => Boolean(outcome.articleId));
+      return Response.json({ outcomes }, { status: createdAny ? 201 : 200 });
     }
 
     if (input.action === "bulk-approve") {
-      const articles = await db.article.findMany({ where: { id: { in: input.articleIds }, status: "NEEDS_REVIEW", archivedAt: null }, include: { sourceBrief: { include: { references: true, facts: true } } } });
+      const articles = await db.article.findMany({ where: { id: { in: input.articleIds }, status: "NEEDS_REVIEW", archivedAt: null }, include: { sourceBrief: { include: { references: true, facts: true } }, versions: { orderBy: { versionNumber: "desc" }, take: 1 } } });
       const canOverrideEditorialSeparation = user.roles.some((assignment) => assignment.role === "OWNER" || assignment.role === "ADMIN");
-      if (!canOverrideEditorialSeparation && articles.some((article) => article.createdById === user.id)) return Response.json({ error: "Reviewers cannot approve articles they created." }, { status: 403 });
+      if (!canOverrideEditorialSeparation && articles.some((article) => article.createdById === user.id || article.versions[0]?.createdById === user.id)) return Response.json({ error: "Reviewers cannot approve articles they created or last revised." }, { status: 403 });
       if (articles.length !== new Set(input.articleIds).size) return Response.json({ error: "Every selected article must exist and be awaiting review. No items were approved." }, { status: 409 });
       for (const article of articles) await requireMediaAccess(user.id, article.mediaSiteId);
       const result = await db.$transaction(async (tx) => {
@@ -154,23 +164,28 @@ export async function POST(request: Request) {
     await requireMediaAccess(user.id, article.mediaSiteId);
 
     if (input.action === "edit") {
-      if (["PUBLISHED", "ARCHIVED", "REJECTED"].includes(article.status)) return Response.json({ error: "This article cannot be edited in its current state." }, { status: 409 });
+      if (["PUBLISHED", "ARCHIVED"].includes(article.status)) return Response.json({ error: "This article cannot be edited in its current state." }, { status: 409 });
       const slug = `${slugify(input.slug || input.title)}-${article.mediaSiteId.slice(-6)}-${article.sourceBriefId.slice(-6)}`.slice(0, 120);
       const featuredAssetId = input.featuredAssetId === undefined ? article.featuredAssetId ?? null : input.featuredAssetId;
       if (featuredAssetId && !(await db.asset.findFirst({ where: { id: featuredAssetId, mediaSiteId: article.mediaSiteId, deletedAt: null } }))) return Response.json({ error: "Featured asset not found in this media library." }, { status: 400 });
       const next = { ...articleVersionFields(article), ...persistedFacts(article.claimsUsed, article.uncertainties), title: input.title, slug, excerpt: input.excerpt, body: input.body, seoTitle: input.seoTitle, metaDescription: input.metaDescription, tags: input.tags, imageBrief: input.imageBrief, featuredAssetId };
       const updated = await db.$transaction(async (tx) => {
-        const saved = await tx.article.update({ where: { id: article.id }, data: { ...next, versionNumber: { increment: 1 }, status: "NEEDS_REVIEW", approvedAt: null, approvedById: null } });
-        await tx.articleVersion.create({ data: { articleId: article.id, ...next, versionNumber: saved.versionNumber, changeType: "MANUAL_EDIT", createdById: user.id, changeSummary: "Manual editorial update." } });
-        await tx.auditLog.create({ data: { actorUserId: user.id, mediaSiteId: article.mediaSiteId, action: "ARTICLE_EDITED", entityType: "Article", entityId: article.id, metadata: { versionNumber: saved.versionNumber } } });
-        return saved;
+        const saved = await tx.article.updateMany({ where: { id: article.id, versionNumber: article.versionNumber }, data: { ...next, versionNumber: { increment: 1 }, status: "NEEDS_REVIEW", approvedAt: null, approvedById: null } });
+        if (saved.count !== 1) return null;
+        const updatedArticle = await tx.article.findUniqueOrThrow({ where: { id: article.id } });
+        await tx.articleVersion.create({ data: { articleId: article.id, ...next, versionNumber: updatedArticle.versionNumber, changeType: "MANUAL_EDIT", createdById: user.id, changeSummary: "Manual editorial update." } });
+        await tx.publicationTarget.updateMany({ where: { articleId: article.id, status: { in: ["QUEUED", "SCHEDULED"] } }, data: { status: "CANCELLED", lastErrorCode: "ARTICLE_REWORKED", lastErrorMessage: "Cancelled because the article was edited after scheduling." } });
+        await tx.auditLog.create({ data: { actorUserId: user.id, mediaSiteId: article.mediaSiteId, action: "ARTICLE_EDITED", entityType: "Article", entityId: article.id, metadata: { versionNumber: updatedArticle.versionNumber } } });
+        return updatedArticle;
       });
+      if (!updated) return Response.json({ error: "Artikel telah diubah oleh editor lain. Muat ulang dan coba lagi." }, { status: 409 });
       return Response.json(updated);
     }
 
     if (input.action === "review") {
       const canOverrideEditorialSeparation = user.roles.some((assignment) => assignment.role === "OWNER" || assignment.role === "ADMIN");
-      if (!canOverrideEditorialSeparation && article.createdById === user.id) return Response.json({ error: "Reviewers cannot approve articles they created." }, { status: 403 });
+      const currentVersion = await db.articleVersion.findUnique({ where: { articleId_versionNumber: { articleId: article.id, versionNumber: article.versionNumber } }, select: { createdById: true } });
+      if (!canOverrideEditorialSeparation && (article.createdById === user.id || currentVersion?.createdById === user.id)) return Response.json({ error: "Reviewers cannot approve articles they created or last revised." }, { status: 403 });
       if (article.status !== "NEEDS_REVIEW") return Response.json({ error: "Only drafts awaiting review may be reviewed." }, { status: 409 });
       const updated = await db.$transaction(async (tx) => {
         const status = input.decision === "APPROVED" ? "APPROVED" : input.decision === "REJECTED" ? "REJECTED" : "IN_REVISION";
@@ -184,34 +199,67 @@ export async function POST(request: Request) {
     }
 
     if (input.action === "revise") {
-      if (["PUBLISHED", "ARCHIVED", "REJECTED"].includes(article.status)) return Response.json({ error: "This article cannot be revised in its current state." }, { status: 409 });
+      if (["PUBLISHED", "ARCHIVED"].includes(article.status)) return Response.json({ error: "This article cannot be revised in its current state." }, { status: 409 });
       const profile = article.mediaSite.profile ?? { niche: "", targetAudience: "", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 };
-      const result = await generateDraft(article.sourceBrief, { ...article.mediaSite, profile }, input.instruction, { title: article.title, excerpt: article.excerpt, body: article.body, seoTitle: article.seoTitle, metaDescription: article.metaDescription, tags: article.tags, imageBrief: article.imageBrief });
+      const guidance = await enabledWritingGuidance(db, article.mediaSiteId);
+      let result: Awaited<ReturnType<typeof generateDraft>>;
+      try {
+        result = await generateDraft(article.sourceBrief, { ...article.mediaSite, profile }, input.instruction, { title: article.title, excerpt: article.excerpt, body: article.body, seoTitle: article.seoTitle, metaDescription: article.metaDescription, tags: article.tags, imageBrief: article.imageBrief }, guidance);
+      } catch (error) {
+        const reason = error instanceof DraftEvidenceValidationError
+          ? "Model AI menghasilkan klaim yang merujuk bukti tidak valid, bahkan setelah percobaan ulang. Tambahkan fakta yang terverifikasi di brief, atau perketat instruksi revisi."
+          : error instanceof IntegrationNotConfigured
+            ? error.message
+            : error instanceof Error && /timeout|abort/i.test(`${error.name} ${error.message}`)
+              ? "Permintaan ke penyedia AI melebihi batas waktu. Coba lagi dengan instruksi yang lebih pendek."
+              : "Penyedia AI gagal menghasilkan draf revisi. Artikel lama tetap utuh dan belum diubah.";
+        await db.aiGenerationRun.create({ data: {
+          sourceBriefId: article.sourceBriefId, articleId: article.id, mediaSiteId: article.mediaSiteId, operation: "REVISE_ARTICLE",
+          provider: process.env.AI_PROVIDER || "unconfigured", model: process.env.AI_MODEL || "unconfigured",
+          promptVersion: PROMPT_VERSION, status: "FAILED", inputHash: `${article.id}:${article.versionNumber}`,
+          errorCode: error instanceof DraftEvidenceValidationError ? "EVIDENCE_VALIDATION_FAILED" : error instanceof IntegrationNotConfigured ? "INTEGRATION_NOT_CONFIGURED" : "REVISION_FAILED",
+          errorMessage: error instanceof Error ? error.message.slice(0, 1000) : "Unknown revision error",
+          createdById: user.id, completedAt: new Date(),
+        } });
+        return Response.json({ error: reason }, { status: 502 });
+      }
       const draft = result.draft;
-      const versionNumber = article.versionNumber + 1;
       const slug = `${slugify(draft.slugSuggestion || draft.title)}-${article.mediaSiteId.slice(-6)}-${article.sourceBriefId.slice(-6)}`.slice(0, 120);
       const updated = await db.$transaction(async (tx) => {
-        const saved = await tx.article.update({ where: { id: article.id }, data: { title: draft.title, slug, excerpt: draft.excerpt, body: draft.body, seoTitle: draft.seoTitle, metaDescription: draft.metaDescription, tags: draft.tags, imageBrief: draft.imageBrief, claimsUsed: draft.claimsUsed, uncertainties: draft.uncertainties, versionNumber, status: "NEEDS_REVIEW", approvedAt: null, approvedById: null } });
-        await tx.articleVersion.create({ data: { articleId: article.id, ...articleVersionFields(saved), ...persistedFacts(saved.claimsUsed, saved.uncertainties), versionNumber, changeType: "AI_REVISION", changeInstruction: input.instruction, createdById: user.id, aiProvider: result.provider, aiModel: result.model, promptVersion: result.promptVersion, changeSummary: result.changeSummary } });
+        const saved = await tx.article.updateMany({ where: { id: article.id, versionNumber: article.versionNumber }, data: { title: draft.title, slug, excerpt: draft.excerpt, body: draft.body, seoTitle: draft.seoTitle, metaDescription: draft.metaDescription, tags: draft.tags, imageBrief: draft.imageBrief, claimsUsed: draft.claimsUsed, uncertainties: draft.uncertainties, versionNumber: { increment: 1 }, status: "NEEDS_REVIEW", approvedAt: null, approvedById: null } });
+        if (saved.count !== 1) return null;
+        const revised = await tx.article.findUniqueOrThrow({ where: { id: article.id } });
+        const versionNumber = revised.versionNumber;
+        await tx.articleVersion.create({ data: { articleId: article.id, ...articleVersionFields(revised), ...persistedFacts(revised.claimsUsed, revised.uncertainties), versionNumber, changeType: "AI_REVISION", changeInstruction: input.instruction, createdById: user.id, aiProvider: result.provider, aiModel: result.model, promptVersion: result.promptVersion, changeSummary: result.changeSummary } });
+        await tx.publicationTarget.updateMany({ where: { articleId: article.id, status: { in: ["QUEUED", "SCHEDULED"] } }, data: { status: "CANCELLED", lastErrorCode: "ARTICLE_REWORKED", lastErrorMessage: "Cancelled because the article was revised after scheduling." } });
         await tx.aiGenerationRun.create({ data: { sourceBriefId: article.sourceBriefId, articleId: article.id, mediaSiteId: article.mediaSiteId, operation: "REVISE_ARTICLE", provider: result.provider, model: result.model || "unknown", promptVersion: result.promptVersion, status: "SUCCEEDED", inputHash: result.inputHash, outputSummary: draft.title, latencyMs: result.latencyMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, createdById: user.id, completedAt: new Date() } });
         await tx.auditLog.create({ data: { actorUserId: user.id, mediaSiteId: article.mediaSiteId, action: "ARTICLE_REVISED", entityType: "Article", entityId: article.id, metadata: { versionNumber, instruction: input.instruction } } });
-        return saved;
+        return revised;
       });
+      if (!updated) return Response.json({ error: "Artikel telah diubah oleh editor lain. Muat ulang dan coba lagi." }, { status: 409 });
       return Response.json(updated);
     }
 
     if (input.action === "restore") {
-      if (["PUBLISHED", "ARCHIVED", "REJECTED"].includes(article.status)) return Response.json({ error: "This article cannot be restored in its current state." }, { status: 409 });
+      if (["PUBLISHED", "ARCHIVED"].includes(article.status)) return Response.json({ error: "This article cannot be restored in its current state." }, { status: 409 });
       const previous = await db.articleVersion.findUnique({ where: { articleId_versionNumber: { articleId: article.id, versionNumber: input.versionNumber } } });
       if (!previous) return Response.json({ error: "Article version not found." }, { status: 404 });
-      const versionNumber = article.versionNumber + 1;
+      const latest = await db.articleVersion.findUnique({ where: { articleId_versionNumber: { articleId: article.id, versionNumber: article.versionNumber } } });
       const data = { title: previous.title, slug: `${slugify(previous.title)}-${article.mediaSiteId.slice(-6)}-${article.sourceBriefId.slice(-6)}`.slice(0, 120), excerpt: previous.excerpt, body: previous.body, seoTitle: previous.seoTitle, metaDescription: previous.metaDescription, tags: previous.tags, imageBrief: previous.imageBrief, categoryId: previous.categoryId ?? null, featuredAssetId: previous.featuredAssetId ?? null, claimsUsed: previous.claimsUsed === null ? [] : previous.claimsUsed, uncertainties: previous.uncertainties === null ? [] : previous.uncertainties };
+      if (latest && latest.title === previous.title && latest.excerpt === previous.excerpt && latest.body === previous.body && latest.seoTitle === previous.seoTitle && latest.metaDescription === previous.metaDescription && latest.tags.toString() === previous.tags.toString() && latest.imageBrief === previous.imageBrief && (latest.categoryId ?? null) === (previous.categoryId ?? null) && (latest.featuredAssetId ?? null) === (previous.featuredAssetId ?? null)) {
+        return Response.json(article);
+      }
       const updated = await db.$transaction(async (tx) => {
-        const saved = await tx.article.update({ where: { id: article.id }, data: { ...data, versionNumber, status: "NEEDS_REVIEW", approvedAt: null, approvedById: null } });
+        const saved = await tx.article.updateMany({ where: { id: article.id, versionNumber: article.versionNumber }, data: { ...data, versionNumber: { increment: 1 }, status: "NEEDS_REVIEW", approvedAt: null, approvedById: null } });
+        if (saved.count !== 1) return null;
+        const restored = await tx.article.findUniqueOrThrow({ where: { id: article.id } });
+        const versionNumber = restored.versionNumber;
         await tx.articleVersion.create({ data: { articleId: article.id, ...data, versionNumber, changeType: "RESTORE", createdById: user.id, changeSummary: `Restored version ${previous.versionNumber}.` } });
+        await tx.publicationTarget.updateMany({ where: { articleId: article.id, status: { in: ["QUEUED", "SCHEDULED"] } }, data: { status: "CANCELLED", lastErrorCode: "ARTICLE_REWORKED", lastErrorMessage: "Cancelled because the article was restored after scheduling." } });
         await tx.auditLog.create({ data: { actorUserId: user.id, mediaSiteId: article.mediaSiteId, action: "ARTICLE_VERSION_RESTORED", entityType: "Article", entityId: article.id, metadata: { fromVersion: previous.versionNumber, versionNumber } } });
-        return saved;
+        return restored;
       });
+      if (!updated) return Response.json({ error: "Artikel telah diubah oleh editor lain. Muat ulang dan coba lagi." }, { status: 409 });
       return Response.json(updated);
     }
     return Response.json({ error: "Unsupported action." }, { status: 400 });

@@ -7,9 +7,11 @@ One source brief may produce multiple articles, but the content should be **genu
 ## 2. Input model
 
 A source brief can contain:
-- Working topic/headline.
-- User-supplied narrative or notes.
-- One or more public reference URLs.
+- Working topic/headline (required).
+- User-supplied narrative or notes (optional; may be empty for topic-only drafting).
+- One or more public reference URLs (optional).
+
+Topic-only mode is a writing aid, not a reporting or verification source. It may help structure a general draft around the supplied theme, but must not present invented or time-sensitive specifics as established fact. Do not invent dates, figures, named people, quotes, documents, events, or source attribution. Mark assumptions and verification needs; an editor must add evidence or remove unsupported specifics before approval.
 - Optional attached documents or transcripts (future/phase-dependent).
 - Important facts, entities, names, dates, and constraints.
 - Selected target media sites.
@@ -62,6 +64,7 @@ Prompt input should include:
 - Output JSON schema.
 - Instruction not to invent facts, quotes, sources, or attribution.
 - Instruction to mark uncertainty and unsupported claims.
+- Active per-media writing skills (on/off toggles, e.g. `humas-instansi` institutional press-release style) appended as stylistic guidance; skill text is fixed, audited, and never treated as source evidence.
 
 Prompt templates must be versioned. Do not place provider secrets or privileged system instructions inside user-visible prompts.
 

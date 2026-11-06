@@ -24,7 +24,7 @@ A Next.js modular-monolith newsroom workspace for multi-domain editorial workflo
 
 This checkout has a private PostgreSQL 18 cluster in the ignored `.local/postgres-data` directory on `127.0.0.1:5433`; it is separate from any existing PostgreSQL installation. Its connection string and the generated session secret are held in the ignored `.env.local` file. The database has been migrated and seeded with one local owner account: `owner@newsroom.local`. The generated owner password is available only in the ignored `.local/owner.secret` file. Keep both ignored files private.
 
-Start the local app (and restart the private database after a reboot) with `powershell -ExecutionPolicy Bypass -File .\scripts\start-local.ps1`, then visit `http://localhost:3000/login`. The existing OpenRouter key passed a real JSON request and Cloudinary passed an authenticated ping; no image upload has been made. There is no local Redis service, so immediate publishing uses inline mode and scheduled jobs do not run. The database is intentionally empty; add only your newsroom's real media and domain details.
+Start the local app (and restart the private database after a reboot) with `powershell -ExecutionPolicy Bypass -File .\scripts\start-local.ps1`, then visit `http://localhost:3000/login`. The existing OpenRouter key passed a real JSON request and Cloudinary passed an authenticated ping; no image upload has been made. There is no local Redis service, so immediate publishing uses inline mode and scheduled jobs do not run. The local database contains owner and test records created while exercising editorial flows; inspect and remove those records before using this database as a real newsroom workspace. No production newsroom content, domains, or external publishing setup should be assumed.
 
 ## Commands
 
@@ -41,6 +41,16 @@ Start the local app (and restart the private database after a reboot) with `powe
 ## Environment variables
 
 See [`.env.example`](.env.example). `SESSION_SECRET` must be a high-entropy secret; set `ADMIN_BASE_URL` to the dashboard host (it defaults to `http://localhost:3000`); database, Cloudinary and AI keys are server-only. Configure Cloudinary's `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`; image uploads remain blocked without them. `AI_TEST_ADAPTER=true` enables only a clearly labelled local deterministic test path and is ignored in production.
+
+## Drafting from a topic
+
+A brief requires a working topic, but narrative and reference URLs are optional. Editors may ask AI to draft from the theme alone. Treat that output as an unverified writing draft—not as researched or independently reported news. Verify current facts, dates, figures, names, quotations, and attributions before approval; add evidence or remove unsupported specifics.
+
+## Writing skills
+
+Skills are per-media on/off guidance blocks that fix a narrative style for AI drafts and revisions. They are toggled from any editorial article card (**Gaya penulisan AI**) and from the media edit card (`Kelola media` → media → "Skill penulisan AI"); both write the same per-media setting. The seeded skill `humas-instansi` ("Narasi humas instansi") encodes the institutional press-release style used in public-service/police activity recaps: informative who/what/where/result headlines, formal action verbs, and a closing that reinforces the institution's role. Skill guidance is injected only as stylistic instruction into the prompt; it is not evidence, and the existing anti-fabrication rules still apply.
+
+Drafting needs a real provider. While `AI_TEST_ADAPTER=true`, the app produces deterministic sample text instead of calling any model, the editorial revision panel says so, and the generate button stays disabled. Set `AI_TEST_ADAPTER=false`, keep `AI_PROVIDER`/`AI_API_KEY` in the environment, and restart the server for real drafts.
 
 ## Architecture and publication
 

@@ -1,6 +1,6 @@
 # Database Model — Conceptual Specification
 
-Use PostgreSQL and Prisma. This is the intended domain model, not a final generated Prisma schema. The coding agent must translate it into a normalized Prisma schema, add indexes/constraints, and create migrations.
+The application uses PostgreSQL and Prisma. This document is the conceptual domain-model reference; the implemented schema is `prisma/schema.prisma` and its committed migrations are authoritative for actual field names, relations, constraints, and deletion policies. Do not treat this conceptual list as a migration checklist without comparing it to the current schema.
 
 ## 1. Core entities
 
@@ -46,7 +46,7 @@ Use PostgreSQL and Prisma. This is the intended domain model, not a final genera
 
 ### SourceBrief
 - `id`, `createdById`
-- `workingTitle`, `narrative`, `editorNotes`, `status`
+- `workingTitle` (required topic), `narrative` (optional; may be empty for topic-only drafting), `editorNotes`, `status`
 - `sourceSummary` (optional)
 - `createdAt`, `updatedAt`, `archivedAt`
 

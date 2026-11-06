@@ -22,7 +22,10 @@ export async function POST(request: Request) {
     await requireMediaAccess(user.id, input.mediaSiteId);
     const site = await db.mediaSite.findUnique({ where: { id: input.mediaSiteId }, select: { id: true } });
     if (!site) return Response.json({ error: "Media not found." }, { status: 404 });
-    const category = await db.category.create({ data: { mediaSiteId: input.mediaSiteId, name: input.name, slug: slugify(input.name), description: input.description, sortOrder: await db.category.count({ where: { mediaSiteId: input.mediaSiteId } }) } });
+    const slug = slugify(input.name);
+    const duplicate = await db.category.findFirst({ where: { mediaSiteId: input.mediaSiteId, slug } });
+    if (duplicate) return Response.json({ error: "A category with this name already exists." }, { status: 409 });
+    const category = await db.category.create({ data: { mediaSiteId: input.mediaSiteId, name: input.name, slug, description: input.description, sortOrder: await db.category.count({ where: { mediaSiteId: input.mediaSiteId } }) } });
     await audit(user.id, "CATEGORY_CREATED", "Category", category.id, input.mediaSiteId, { slug: category.slug });
     return Response.json(category, { status: 201 });
   } catch (error) { return jsonError(error); }
@@ -37,7 +40,10 @@ export async function PATCH(request: Request) {
     await requireMediaAccess(user.id, category.mediaSiteId);
     if (input.action === "rename") {
       if (!input.name) return Response.json({ error: "Category name is required." }, { status: 400 });
-      const updated = await db.category.update({ where: { id: category.id }, data: { name: input.name, slug: slugify(input.name), ...(input.description !== undefined ? { description: input.description } : {}) } });
+      const slug = slugify(input.name);
+      const duplicate = await db.category.findFirst({ where: { mediaSiteId: category.mediaSiteId, slug, NOT: { id: category.id } } });
+      if (duplicate) return Response.json({ error: "A category with this name already exists." }, { status: 409 });
+      const updated = await db.category.update({ where: { id: category.id }, data: { name: input.name, slug, ...(input.description !== undefined ? { description: input.description } : {}) } });
       await audit(user.id, "CATEGORY_UPDATED", "Category", updated.id, updated.mediaSiteId, { slug: updated.slug });
       return Response.json(updated);
     }

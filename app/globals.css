@@ -54,6 +54,26 @@ h1 { margin: 0 0 7px; color: #1f3027; font-size: clamp(22px, 2.2vw, 27px); lette
 h2, h3 { color: #26372e; line-height: 1.3; }
 .subtitle { max-width: 760px; margin: 0; color: var(--muted); line-height: 1.6; }
 .card { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgb(22 46 32 / 3%); }
+.editorial-sections { display: grid; min-width: 0; gap: 8px; }
+.editorial-section, .editorial-bulk-section { min-width: 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.editorial-section > summary, .editorial-bulk-section > summary { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; color: #27382f; cursor: pointer; font-weight: 700; list-style-position: inside; }
+.editorial-section > summary:hover, .editorial-bulk-section > summary:hover { background: #f7faf8; }
+.editorial-section > summary:focus-visible, .editorial-bulk-section > summary:focus-visible { outline-offset: -3px; }
+.editorial-section-hint { color: var(--muted); font-size: 12px; font-weight: 400; text-align: right; }
+.editorial-section-content { min-width: 0; padding: 15px; border-top: 1px solid var(--line); }
+.editorial-section-content > h3 { margin: 0 0 10px; font-size: 14px; }
+.editorial-section-content > p { margin: 8px 0; }
+.editorial-preview-title { margin: 16px 0 8px; font-size: 21px; }
+.editorial-body { margin-top: 14px; white-space: pre-wrap; line-height: 1.75; overflow-wrap: anywhere; }
+.editorial-subheading { margin-top: 20px !important; }
+.editorial-version-row { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
+.editorial-version-row .muted { flex: 1; }
+.editorial-evidence-details { margin-top: 10px; }
+.editorial-evidence-details > summary { color: #34473c; cursor: pointer; font-size: 12px; font-weight: 650; }
+.editorial-evidence-details > .source-list { margin-top: 8px; }
+.editorial-bulk-section { padding: 0; }
+.editorial-bulk-section > div { padding: 0 14px 14px; }
+.editorial-bulk-section .card { padding: 12px; box-shadow: none; }
 .grid { display: grid; min-width: 0; gap: 16px; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }

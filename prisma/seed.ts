@@ -1,6 +1,20 @@
 import { hash } from "bcryptjs";
 import { db } from "../lib/db";
+import { WRITING_SKILLS } from "../lib/writing-skills";
+
+async function seedSkills() {
+  for (const skill of WRITING_SKILLS) {
+    await db.writingSkill.upsert({
+      where: { slug: skill.slug },
+      update: { name: skill.name, description: skill.description, promptGuidance: skill.promptGuidance, isActive: true },
+      create: { slug: skill.slug, name: skill.name, description: skill.description, promptGuidance: skill.promptGuidance, isActive: true },
+    });
+  }
+  console.log(`Writing skills ready: ${WRITING_SKILLS.map((skill) => skill.slug).join(", ")}`);
+}
+
 async function main() {
+  await seedSkills();
   const email = process.env.SEED_OWNER_EMAIL?.trim().toLowerCase();
   const password = process.env.SEED_OWNER_PASSWORD;
   const name = process.env.SEED_OWNER_NAME?.trim() || "Newsroom Owner";

@@ -23,8 +23,12 @@ export function createEditorialEvidenceSnapshot(brief: {
   facts: { id: string; claimText: string; supportStatus: string; evidenceNote: string; sourceReferenceId: string | null }[];
   references: { id: string; url: string; canonicalUrl: string | null; title: string; publisherName: string; retrievalStatus: string; retrievedAt: Date | null }[];
 }): EditorialEvidenceSnapshot {
+  const successfulIds = new Set(brief.references.filter((reference) => reference.retrievalStatus === "SUCCESS").map((reference) => reference.id));
   return editorialEvidenceSnapshotSchema.parse({
-    sourceFacts: brief.facts.map(({ id, claimText, supportStatus, evidenceNote, sourceReferenceId }) => ({ id, claimText, supportStatus, evidenceNote, sourceReferenceId })),
+    sourceFacts: brief.facts.map(({ id, claimText, supportStatus, evidenceNote, sourceReferenceId }) => ({
+      id, claimText, supportStatus, evidenceNote,
+      sourceReferenceId: sourceReferenceId && successfulIds.has(sourceReferenceId) ? sourceReferenceId : null
+    })),
     sourceReferences: brief.references.filter((reference) => reference.retrievalStatus === "SUCCESS").map((reference) => ({
       id: reference.id,
       url: reference.canonicalUrl || reference.url,

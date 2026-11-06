@@ -1,59 +1,53 @@
 # Implementation Status
 
-## Repository baseline
+This file records the current implementation and its evidence. Product requirements and planned capabilities remain in `docs/`; a requirement is not considered delivered unless this status or a verification record says so.
 
-- Handoff documentation is under `docs/`; the root initially had no application source, package manifest, Git metadata, or existing database configuration.
-- Available toolchain observed: Node.js `v24.16.0`, npm `11.17.0`; dependencies installed locally.
-- Initial `git status` could not run because this directory is not a Git repository.
+## Current application
 
-## Roadmap plan and status
+- Next.js App Router, TypeScript, PostgreSQL, and Prisma modular monolith with authenticated dashboard and host-resolved public media/article routes.
+- Local private PostgreSQL 18 cluster is configured at `127.0.0.1:5433`; use `scripts/start-local.ps1` to start/reuse it and run the local app at `http://localhost:3000/login`.
+- Local owner account is `owner@newsroom.local`. The password and all API/database secrets remain in ignored local files; never copy them into documentation or Git.
+- The local database contains test records made during workflow debugging. Do not treat them as real newsroom content or a clean empty database. Reset only after confirming local test data is disposable.
 
-| Roadmap phase | Implementation and evidence | Status |
-|---|---|---|
-| 0 — Discovery / baseline | Next.js App Router, strict TypeScript, env template, secret ignore rules, documented commands. | Complete |
-| 1 — Foundation / auth / database | PostgreSQL + Prisma models and an initial migration, credential login, signed HTTP-only sessions, server-side RBAC/media scope, audit history, owner seed command, and responsive admin shell. A private local PostgreSQL 18 cluster runs at `127.0.0.1:5433`, migration is applied, and the local owner account is seeded; the pre-existing PostgreSQL cluster was left unchanged. | Live and verified locally |
-| 2 — Media / domains | Media and profile editing, host mapping, manual verification state, hostname resolver, host-scoped public article routes. | Implemented; external DNS/TLS/control verification remains an operator action |
-| 3 — Source briefs | Persisted narrative/reference workflow, bounded public HTTP(S) fetch with DNS pinning, private/reserved IP rejection, redirect/content/size/time limits, per-reference extraction status and edit controls. | Implemented |
-| 4 — AI generation | Versioned structured-output adapter and Zod validation, profile-specific per-media drafts, auditable provider/model/prompt/usage, explicitly labelled development test adapter. OpenRouter uses its official API, JSON-mode parameters, routing restricted to listed non-collecting endpoints, and Qwen3 235B by default; Qwen3 32B remains the lower-cost option. A real OpenRouter JSON request succeeded with this environment's server-side key. | Live OpenRouter verified; key remains in ignored local `.env` |
-| 5 — Editorial | Individual drafts, manual versioned edits, article-scoped AI revisions, individual and selected batch review, reviewer notes, restores and audit events. Review decisions now freeze validated facts and successful-reference metadata; the editorial history exposes the frozen snapshot, publishing requires approval for the exact current version, and public targets derive citations from that decision rather than mutable brief data. | Implemented |
-| 6 — Cloudinary | Official server-side Node SDK streams MIME-sniffed upload bytes; provider response constraints checked; Cloudinary public ID and image/provenance metadata stored in PostgreSQL; no local/S3 fallback or client-exposed secret. | Cloudinary credentials passed an authenticated account ping; image upload still awaits a rights-cleared newsroom image |
-| 7 — Publishing | Approved version snapshots, per-verified-domain target records, status/attempt history, BullMQ/exponential retry and inline mode, tenant/domain-scoped routes. | Implemented; Redis and production host/DNS setup required for queued/scheduled jobs |
-| 8 — Monitoring | User/media-scoped database KPIs, 30-second dashboard refresh with visible errors and true last-check time, article pipeline, per-domain publication activity, and explicit credential-versus-worker readiness. | Implemented; visually checked at 320px, 390px, tablet, and desktop widths |
-| 9 — Operations / usability | Role/media authorization, honest integration readiness, rate/size bounds, outbound SSRF controls, media and source-brief guided entry, Indonesian staff roles/status labels, rights evidence, responsive newsroom shell, database-backed dashboard polling, and private local Windows DB launcher. | Local database and live credential checks verified; hosted deployment and scheduled worker remain external |
+## Implemented capabilities
 
-## Provisional, reversible defaults
+- Authentication with signed HTTP-only sessions, server-side role/media-scope checks, same-origin mutation checks, audit records, and in-memory rate limits for login, AI actions, source ingestion, uploads, and publishing.
+- Media profiles, categories, domains, role/user management, and host-based tenant resolution. Domain verification is an admin record of an external ownership check; the app does not perform DNS verification.
+- Source briefs with optional narrative and optional references. A topic alone can be used to request an AI-authored draft; supplied facts/references remain evidence inputs and unsupported specifics must not be presented as verified.
+- Bounded public HTTP(S) reference retrieval with DNS/public-IP validation, pinned requests, redirect checks, robots policy, size/time/content bounds, and per-reference status.
+- OpenRouter integration with structured-output validation, Qwen3 235B configured as the local default, Qwen3 32B as an optional lower-cost model, and a development-only deterministic test adapter. Generation is versioned per media; invalid/unsupported source-fact citations are rejected.
+- Editorial workflow: manual edit, AI revision, approval/rejection/needs-changes, individual and bulk review, immutable evidence snapshots, version history, restore, and compare-and-set protections for concurrent writes. Repeated restore of identical content does not create duplicate versions.
+- Mandatory Cloudinary asset handling using the official server-side SDK, upload validation, provenance/license metadata, media scope checks, and publication-time featured-image snapshots. No real image upload has been completed yet.
+- Per-domain publication targets with immutable approved-version snapshots, attempt history, idempotency, state guards, inline immediate publication, and optional BullMQ/Redis worker support. Scheduled execution and worker retry have not been verified locally because Redis is unavailable.
+- Dashboard, monitoring, integrations/setup surfaces, responsive navigation, paged list APIs, editorial queue pagination, CSP/security headers, and safe generic server errors.
+- Writing skills: per-media on/off guidance blocks that inject a fixed narrative style into AI drafting and revision prompts (seeded skill `humas-instansi`, derived from public-service/police press-release style). Skill state lives in `WritingSkill`/`MediaWritingSkill` tables, is audited, and is toggleable both from the media edit card and from a "Gaya penulisan AI" section on every editorial article card.
+- AI readiness is reported honestly in the editorial UI: the revision section states whether a real provider or the deterministic test adapter is active, generation is blocked while the test adapter is on, and a revision that fails keeps the previous article version untouched while returning an actionable 502 message instead of a generic internal error.
 
-- Indonesian interface/article language initially; one multi-tenant Next.js application and an optional worker in this repository.
-- Roles: OWNER, ADMIN, EDITOR, REVIEWER, PUBLISHER; seed creation is an explicit CLI operation, never an unauthenticated public bootstrap route.
-- The 10–30/day target is not treated as a per-domain volume guarantee; provider/capacity configuration remains unset pending owner confirmation.
-- AI is disabled in installs without a provider key. This local newsroom uses OpenRouter with Qwen3 235B; its existing API key remains in ignored `.env`. A deterministic test adapter is labeled test-only and cannot be mistaken for live AI.
-- Publication uses the shared application's per-media host-resolved renderer. Each target is bound to an active verified domain and retains its exact approved version snapshot; this is not an external CMS integration.
-- Cloudinary remains mandatory for all managed images. Missing credentials show setup status and block uploads; no local/S3 fallback.
-- Domains remain pending until an administrator explicitly confirms control outside this system; the current UI confirmation is not automatic DNS validation.
-- Publisher/ownership disclosure and newsroom byline are admin-entered truth fields, not fabricated identities.
+## Verification recorded
 
-## Verification log
+The following results were observed in the current development checkout:
 
-- `npx prisma validate`: passed against the current schema.
-- `npx prisma migrate deploy` and `npx prisma migrate status`: passed against the private local PostgreSQL 18 cluster at `127.0.0.1:5433`; schema is current. The original PostgreSQL service/config was not modified.
-- Owner seed succeeded. Login was exercised in Chromium with the generated local owner account `owner@newsroom.local`; its password is held in ignored `.local/owner.secret`.
-- OpenRouter key validation returned HTTP 200; an OpenRouter JSON-mode chat completion succeeded using Qwen3 235B. Credentials stayed server-side.
-- Official Cloudinary SDK `api.ping()` returned `status: ok`. No image was uploaded because that requires a newsroom image with verified reuse rights.
-- `npm run typecheck`, `npm run lint`, and `npm test` passed after the final changes; all 19 tests passed, including CC license, public-domain, AI-generated, and newsroom-owned image-evidence requirements.
-- `npm run build`: final production build passed, including Prisma client generation and Next.js TypeScript/build steps.
-- The local app is running at `http://localhost:3000`, started with `scripts/start-local.ps1`; authenticated login, dashboard, media, briefs, editorial, publication, assets, monitoring, staff, and settings routes were exercised.
-- The dashboard API returned real counts from the migrated local database; all newsroom content counts are currently zero. Its 30-second refresh succeeds and reports real local timestamps.
-- Chromium confirmed no document-level horizontal overflow at 320, 390, 768, or 1280 px across newsroom routes; the mobile menu exposes all destinations and closes on Escape while returning keyboard focus.
-- Redis is not installed (no Redis service, Docker, or WSL distribution). Memurai Developer's development-only license has not been accepted; no scheduled worker readiness is claimed. Immediate publication remains available inline.
-- No real newsroom media, articles, domains or public workflows were fabricated; DNS/domain and production hosting are still external setup.
+- `npm run typecheck`: passed.
+- `npm run lint`: passed.
+- `npm test`: 24 tests passed.
+- `npm run build`: passed after stopping the dev process that had locked the Prisma Windows DLL.
+- OpenRouter JSON request and a topic-only draft generation succeeded.
+- A real AI revision succeeded end to end with `AI_TEST_ADAPTER=false`: the editorial UI showed the active skill toggle turn on, the revision section reported "AI tersedia · openrouter · qwen/qwen3-235b-a22b-2507", the article advanced to version 2 with institution-style prose, and `AiGenerationRun` recorded provider `openrouter`, model `qwen/qwen3-32b` (the corrective fallback attempt), 1595/1278 tokens, prompt version `news-draft-id-v2`.
+- Evidence validation now reports which `claimsUsed` entry was rejected and why, and a first rejection is retried once with that corrective feedback instead of surfacing a generic 500. A revision failure leaves the previous article version unchanged and returns an actionable 502 message.
+- Cloudinary SDK account ping succeeded; a real upload remains untested.
+- Authenticated smoke checks returned 200 for dashboard pages and selected API routes. Selected edge cases were exercised: malformed JSON returns 400, invalid upload content type returns 400, extreme pagination input is bounded, duplicate media slug returns 409, unauthenticated sign-status request returns 401, and login throttling returns 429.
+- Dashboard routes exercised locally: dashboard, media, briefs, editorial, publishing, assets, monitoring, users, and settings. This is not a full end-to-end production acceptance test.
 
-## Outstanding external setup / production gates
+## Not yet verified / external gates
 
-- The local isolated PostgreSQL database and owner are ready. The unrelated pre-existing PostgreSQL configuration still has invalid credentials and was deliberately left untouched.
-- Provide a rights-cleared newsroom image to validate a real Cloudinary upload and its stored license provenance.
-- Set an OpenRouter account spend limit and review account/provider privacy and retention policies; the working API key remains only in the ignored local `.env`.
-- For local scheduled-job testing, either approve installation and developer-only use of Memurai under its license or provide another Redis-compatible service. Production needs an independently operated Redis service and worker.
-- Production hosting, DNS/TLS and externally verified domain ownership/control process.
-- Owner-approved publisher ownership disclosure/byline wording and output language/content policy.
-- Verify upstream reference terms, paywall/access restrictions, rate limits and permitted excerpt lengths before production source fetching.
-- Configure backups, secret rotation, CDN cache-key tenant isolation, rate limiting, alerting, monitoring/log retention, capacity testing and recovery drills before production use.
+- Real Cloudinary image upload using an image whose reuse rights have been confirmed.
+- Redis-compatible service and worker startup; scheduled publication and background retry.
+- Production hosting, HTTPS/TLS, DNS, domain ownership verification, backups/restore, CDN tenant cache isolation, alerting, and production load/capacity.
+- Public rendering against a real active media domain and a production tenant dataset.
+- Route-level/integration coverage for every authorization, state transition, publish race, and external integration. The 20-test Vitest suite is not comprehensive system proof.
+- Production AI budget/spend controls and provider privacy/retention review.
+- Final owner-approved publisher disclosures and byline/content policy.
+
+## Documentation policy
+
+Keep this file current when code behavior, test results, local data state, or external gates change. Distinguish implemented, locally smoke-tested, and production-verified behavior; do not claim that an untested external integration works.

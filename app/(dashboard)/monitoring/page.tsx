@@ -11,7 +11,7 @@ export default async function MonitoringPage() {
   const mediaWhere = isOwner ? {} : { mediaScopes: { some: { userId: user.id } } };
   const targetWhere = isOwner ? {} : { mediaSite: { mediaScopes: { some: { userId: user.id } } } };
   const [sites, targets, failedTargetCount] = await Promise.all([
-    db.mediaSite.findMany({ where: mediaWhere, include: { domains: true, _count: { select: { articles: true, publicationTargets: true } } }, orderBy: { displayName: "asc" } }),
+    db.mediaSite.findMany({ where: mediaWhere, include: { domains: true, _count: { select: { articles: true, publicationTargets: true } } }, orderBy: { displayName: "asc" }, take: 200 }),
     db.publicationTarget.findMany({ where: targetWhere, include: { article: { select: { title: true } }, mediaSite: { select: { displayName: true } }, domain: { select: { hostname: true } }, attempts: { orderBy: { attemptNumber: "desc" }, take: 5 } }, orderBy: { updatedAt: "desc" }, take: 100 }),
     db.publicationTarget.count({ where: { ...targetWhere, status: "FAILED" } })
   ]);
@@ -31,14 +31,14 @@ export default async function MonitoringPage() {
 
     <section className="stack" style={{ marginTop: 28 }}>
       <div><h2 style={{ margin: 0, fontSize: 18 }}>Status domain</h2><p className="muted">Domain harus aktif dan sudah diverifikasi sebelum menerima publikasi.</p></div>
-      <div className="table-wrap"><table><thead><tr><th>Domain</th><th>Media</th><th>Verifikasi</th><th>Aktif</th><th>Naskah</th><th>Target publikasi</th></tr></thead><tbody>
+      <div className="table-wrap"><table><caption style={{textAlign:"left",marginBottom:8}}>Status domain per media</caption><thead><tr><th scope="col">Domain</th><th scope="col">Media</th><th scope="col">Verifikasi</th><th scope="col">Aktif</th><th scope="col">Naskah</th><th scope="col">Target publikasi</th></tr></thead><tbody>
         {sites.flatMap((site) => site.domains.map((domain) => <tr key={domain.id}><td>{domain.hostname}</td><td>{site.displayName}</td><td><StatusBadge status={domain.verificationStatus}/></td><td>{domain.isActive ? "Ya" : "Tidak"}</td><td>{site._count.articles}</td><td>{site._count.publicationTargets}</td></tr>))}
       </tbody></table>{!sites.some((site) => site.domains.length > 0) && <div className="empty">Belum ada domain. Tambahkan domain di menu Media & domain setelah menyiapkan situs penerbit.</div>}</div>
     </section>
 
     <section className="stack" style={{ marginTop: 26 }}>
       <div><h2 style={{ margin: 0, fontSize: 18 }}>Publikasi terbaru</h2><p className="muted">Setiap status dan percobaan dicatat terpisah untuk domain tujuan.</p></div>
-      <div className="table-wrap"><table><thead><tr><th>Naskah</th><th>Media / domain</th><th>Status</th><th>Waktu diperbarui</th><th>Percobaan</th><th>Pesan / tautan hasil</th></tr></thead><tbody>
+      <div className="table-wrap"><table><caption style={{textAlign:"left",marginBottom:8}}>Publikasi terbaru per domain</caption><thead><tr><th scope="col">Naskah</th><th scope="col">Media / domain</th><th scope="col">Status</th><th scope="col">Waktu diperbarui</th><th scope="col">Percobaan</th><th scope="col">Pesan / tautan hasil</th></tr></thead><tbody>
         {targets.map((target) => <tr key={target.id}><td>{target.article.title}</td><td>{target.mediaSite.displayName}<div className="muted">{target.domain.hostname}</div></td><td><StatusBadge status={target.status}/></td><td>{target.updatedAt.toLocaleString("id-ID")}</td><td>{target.attemptCount}</td><td>{target.lastErrorMessage || target.remoteUrl || "Belum ada hasil"}</td></tr>)}
       </tbody></table>{!targets.length && <div className="empty">Belum ada publikasi. Naskah yang sudah disetujui akan muncul di sini.</div>}</div>
     </section>

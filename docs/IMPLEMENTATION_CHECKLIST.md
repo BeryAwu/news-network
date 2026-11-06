@@ -1,77 +1,30 @@
 # Implementation Checklist
 
-## Repository and baseline
-- [ ] Inspect repo and write `IMPLEMENTATION_STATUS.md`.
-- [ ] Confirm Node/package manager/Next.js version and scripts.
-- [ ] Set TypeScript strict mode and lint/test commands.
-- [ ] Add `.env.example` and `.gitignore` secret patterns.
-- [ ] Add app shell, error boundary, not-found, loading patterns.
+This checklist summarizes the current code state, not production acceptance. `IMPLEMENTATION_STATUS.md` is the authoritative evidence record. A checked implementation item means code exists; it does not mean every route or external integration has passed production testing.
 
-## Database and auth
-- [ ] Add Prisma and PostgreSQL configuration.
-- [ ] Implement schema and migrations from `DATA_MODEL.md`.
-- [ ] Add seed script for dev owner and sample sites only.
-- [ ] Implement authentication.
-- [ ] Implement roles, permissions, and media scopes.
-- [ ] Add audit helper and tests.
+## Implemented in the application
 
-## Media/domain management
-- [ ] Create/list/edit/archive media sites.
-- [ ] Create/list/verify/disable domains.
-- [ ] Implement hostname normalization/resolution.
-- [ ] Implement cross-tenant query helpers.
-- [ ] Build public site routes and configurable theme.
-- [ ] Test two domains and unknown-domain behavior.
+- [x] Next.js App Router, TypeScript, PostgreSQL/Prisma schema and committed migration.
+- [x] Environment template, ignored local secrets, local owner seed flow, and private Windows database launcher.
+- [x] Signed HTTP-only sessions, roles, media scopes, same-origin mutation checks, audit helper, and rate limits.
+- [x] Media profiles, category management, hostname mapping, manual domain verification state, and public tenant routes.
+- [x] Source briefs with optional narrative/references, safe bounded reference ingestion, source facts, and evidence status.
+- [x] OpenRouter structured-output adapter, versioned prompts, media-specific draft generation, topic-only draft mode, revisions, and generation metadata.
+- [x] Editorial review decisions, immutable evidence snapshots, manual/AI revisions, version history, restore, and bulk approval.
+- [x] Cloudinary server-side upload integration code, provenance/license checks, asset selection, and publication snapshot metadata.
+- [x] Per-domain publication targets, immutable approved snapshots, attempt records, inline immediate publication, idempotency/state guards, and optional BullMQ worker code.
+- [x] Dashboard/monitoring/settings surfaces, bounded list APIs, editorial pagination, responsive shell, and security headers.
 
-## Source ingestion and AI
-- [ ] Source brief CRUD.
-- [ ] Safe URL fetcher and SSRF protections.
-- [ ] Source reference metadata persistence.
-- [ ] Provider-neutral AI adapter.
-- [ ] Prompt versioning.
-- [ ] Structured output schema validation.
-- [ ] Claim/evidence mapping and uncertainty flags.
-- [ ] Generate one draft per selected media site.
-- [ ] Persist AI run logs and usage where available.
+## Verification still required before production
 
-## Editorial workflow
-- [ ] Editorial list and filters.
-- [ ] Article preview and manual editor.
-- [ ] Article version snapshots.
-- [ ] AI revision with instruction.
-- [ ] Diff/restore.
-- [ ] Reviewer decision and notes.
-- [ ] Individual and bulk approval with eligibility checks.
+- [ ] Real Cloudinary image upload using an image whose reuse rights are confirmed; verify saved asset metadata and rendered image.
+- [ ] Redis-compatible service and worker execution; verify scheduled jobs, retries, and recovery after worker restart.
+- [ ] Two real/test hostnames on active media with end-to-end tenant-isolation checks and public rendering.
+- [ ] Route/integration tests for authorization, IDOR, editorial transitions, upload/finalize, publish concurrency/retry, and tenant rendering.
+- [ ] Production hosting, HTTPS/TLS, DNS and independently verified domain ownership.
+- [ ] Backup/restore drill, CDN tenant-aware cache configuration, monitoring/alerts, secret rotation, and capacity/recovery checks.
+- [ ] Owner-approved publisher disclosures, byline policy, AI budget, and provider privacy/retention review.
 
-## Cloudinary
-- [ ] Install official Cloudinary Node SDK.
-- [ ] Add server-side configuration and health check.
-- [ ] Implement signed upload/server upload.
-- [ ] Validate file content/size and user scope.
-- [ ] Save Cloudinary identifiers and metadata in PostgreSQL.
-- [ ] Implement asset picker and image selection for articles.
-- [ ] Add provenance/licence/credit/AI-image fields.
-- [ ] Implement safe deletion and audit.
+## Current automated verification
 
-## Publishing and queues
-- [ ] Add Redis/BullMQ connection and worker process.
-- [ ] Persist publication target before enqueueing (consider outbox).
-- [ ] Implement publisher adapter interface.
-- [ ] Implement shared Next.js media publisher.
-- [ ] Add idempotency and duplicate prevention.
-- [ ] Add retry/backoff and permanent/transient error classification.
-- [ ] Add scheduled publishing.
-- [ ] Add publication attempts and result logs.
-- [ ] Add monitoring/retry UI.
-
-## Final hardening
-- [ ] Cross-tenant security tests.
-- [ ] Authentication/RBAC tests.
-- [ ] AI output validation and unsupported-claim tests.
-- [ ] Cloudinary credential leakage tests/review.
-- [ ] Publishing retry/idempotency tests.
-- [ ] Responsive/accessibility pass.
-- [ ] Production build and deployment runbook.
-- [ ] Backup/restore drill.
-- [ ] Complete `ACCEPTANCE_CRITERIA.md`.
-- [ ] Update `IMPLEMENTATION_STATUS.md` with truthful test results and remaining work.
+At the last recorded run, typecheck, lint, production build, and the 20-test Vitest suite passed. See `IMPLEMENTATION_STATUS.md` for the latest observed results and local smoke-test scope. These checks do not replace the external and route-level verification items above.

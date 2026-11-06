@@ -4,17 +4,18 @@ import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { db } from "@/lib/db";
 import { audit, requireMediaAccess, requireRole, requireSameOrigin } from "@/lib/auth";
-import { jsonError } from "@/lib/http";
+import { UploadError, jsonError } from "@/lib/http";
 import { assetLicenseRequirementError } from "@/lib/asset-provenance";
+import { rateLimit } from "@/lib/rate-limit";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = MAX_BYTES + 64 * 1024;
 async function readBoundedUploadForm(request: Request) {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
-  if (!contentType.startsWith("multipart/form-data;")) throw new Error("Image uploads must use multipart/form-data.");
+  if (!contentType.startsWith("multipart/form-data;")) throw new UploadError("Image uploads must use multipart/form-data.");
   const declaredBytes = request.headers.get("content-length");
-  if (declaredBytes && Number(declaredBytes) > MAX_MULTIPART_BYTES) throw new RangeError("Upload request exceeds the 10 MB image limit.");
-  if (!request.body) throw new Error("Upload request is empty.");
+  if (declaredBytes && Number(declaredBytes) > MAX_MULTIPART_BYTES) throw new UploadError("Upload request exceeds the 10 MB image limit.");
+  if (!request.body) throw new UploadError("Upload request is empty.");
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let receivedBytes = 0;
@@ -62,14 +63,18 @@ async function uploadToCloudinary(file: File, folder: string, publicId: string):
   return promise;
 }
 export async function GET() {
-  const configured = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
-  return Response.json({ configured, provider: "Cloudinary", status: configured ? "ready" : "setup required", maxBytes: MAX_BYTES, formats: ["jpg", "png", "webp", "avif"] });
+  try {
+    await requireRole("OWNER", "ADMIN", "EDITOR");
+    const configured = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
+    return Response.json({ configured, provider: "Cloudinary", status: configured ? "ready" : "setup required", maxBytes: MAX_BYTES, formats: ["jpg", "png", "webp", "avif"] });
+  } catch (error) { return jsonError(error); }
 }
 export async function POST(request: Request) {
   let createdPublicId: string | null = null;
   try {
     requireSameOrigin(request);
     const user = await requireRole("OWNER", "ADMIN", "EDITOR");
+    if (!rateLimit(`upload:${user.id}`, 10, 60 * 1000)) return Response.json({ error: "Terlalu banyak unggahan. Tunggu sebentar." }, { status: 429 });
     const form = await readBoundedUploadForm(request);
     const rawInput = Object.fromEntries(form.entries());
     for (const field of ["sourceUrl", "licenseUrl", "generationPrompt"] as const) if (rawInput[field] === "") delete rawInput[field];

@@ -12,7 +12,7 @@ export default async function AssetsPage() {
   const [media, articles, user] = await Promise.all([visibleMedia(), visibleArticles(), requireUser()]);
   const canManageAssets = user.roles.some((assignment) => ["OWNER", "ADMIN", "EDITOR"].includes(assignment.role));
   const networkScope = await hasNetworkWideScope(user.id);
-  const assets = await db.asset.findMany({ where: { deletedAt: null, ...(networkScope ? {} : { mediaSite: { mediaScopes: { some: { userId: user.id } } } }) }, include: { mediaSite: { select: { displayName: true } } }, orderBy: { createdAt: "desc" } });
+  const assets = await db.asset.findMany({ where: { deletedAt: null, ...(networkScope ? {} : { mediaSite: { mediaScopes: { some: { userId: user.id } } } }) }, include: { mediaSite: { select: { displayName: true } } }, orderBy: { createdAt: "desc" }, take: 200 });
   const cloudConfigured = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
 
   return <>

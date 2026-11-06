@@ -31,14 +31,16 @@ export default function GenerationControls({ briefs, ai }: { briefs: { id: strin
     }
   }
 
-  const aiLabel = ai.configured ? "Kredensial AI tersedia" : ai.mode === "test adapter" ? "Mode uji" : "AI belum disiapkan";
+  const testMode = ai.mode === "test adapter";
+  const aiReady = ai.configured && !testMode;
+  const aiLabel = testMode ? "Mode uji aktif" : aiReady ? "Kredensial AI tersedia" : "AI belum disiapkan";
 
   return <section className="card stack">
     <div className="form-intro"><span className="eyebrow">Persiapan naskah</span><h2>Buat draf untuk media</h2><p className="muted">Pilih brief. Sistem menyiapkan draf untuk tiap media yang dipilih, lalu tim redaksi tetap meninjau sumber dan isinya.</p></div>
-    <div className={ai.configured ? "notice" : "notice notice-warn"}><strong>{aiLabel}</strong>{ai.provider && ` · ${ai.provider}`} {ai.model && `· ${ai.model}`} {!ai.configured && ". Siapkan penyedia AI di Integrasi sebelum membuat draf."}</div>
+    <div className={aiReady ? "notice" : "notice notice-warn"}><strong>{aiLabel}</strong>{ai.provider && ` · ${ai.provider}`} {ai.model && `· ${ai.model}`} {!aiReady && (testMode ? ". Mode uji hanya menghasilkan simulasi, bukan model AI sungguhan. Set AI_TEST_ADAPTER=false di environment dan mulai ulang server untuk memakai AI produksi." : ". Siapkan penyedia AI di Integrasi sebelum membuat draf.")}</div>
     <div className="field"><label htmlFor="draft-source-brief">Pilih brief sumber</label><select className="draft-brief-select" id="draft-source-brief" value={briefId} onChange={(event) => setBriefId(event.target.value)}><option value="">Pilih informasi sumber…</option>{briefs.map((brief) => <option key={brief.id} value={brief.id}>{brief.workingTitle} · {brief.articlesCount} naskah tersimpan</option>)}</select></div>
     {briefs.length === 0 && <div className="muted">Belum ada brief yang dapat digunakan. Tambahkan informasi di halaman Brief sumber.</div>}
-    <div className="actions"><button disabled={!briefId || !ai.configured || busy} className="btn btn-primary" onClick={generate}>{busy ? "Menyiapkan draf…" : "Buat draf untuk tiap media"}</button></div>
+    <div className="actions"><button disabled={!briefId || !aiReady || busy} className="btn btn-primary" onClick={generate}>{busy ? "Menyiapkan draf…" : "Buat draf untuk tiap media"}</button></div>
     {message && <div className="notice" role="status">{message}</div>}
     {error && <div className="notice notice-error" role="alert">{error}</div>}
   </section>;

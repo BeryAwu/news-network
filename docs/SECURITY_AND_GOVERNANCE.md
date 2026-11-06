@@ -7,7 +7,7 @@
 - Apply both role permission and media-site scope.
 - Use secure, HTTP-only, same-site cookies where session-based auth is used.
 - Add CSRF protection where required by the chosen auth approach.
-- Rate-limit login, AI generation, URL ingestion, uploads, and publishing endpoints.
+- Rate-limit login, AI generation, URL ingestion, uploads, and publishing endpoints. The current implementation uses per-process in-memory limits; production multi-instance deployments need a shared limiter. Per-client IP limits also require a trusted proxy header configured through `TRUSTED_PROXY_HEADER` and overwritten by the trusted edge; do not trust arbitrary client forwarding headers.
 
 ## 2. Tenant isolation
 

@@ -5,6 +5,7 @@ import { createEditorialEvidenceSnapshot } from "../lib/editorial-evidence";
 import { isPublicIp, normalizeHostname, slugify } from "../lib/security";
 import { requireSameOrigin } from "../lib/auth";
 import { assetLicenseRequirementError } from "../lib/asset-provenance";
+import { getWritingSkill, enabledWritingGuidance } from "../lib/writing-skills";
 
 describe("managed image license evidence requirements", () => {
   it("requires source and license links plus credit for CC BY images", () => {
@@ -34,9 +35,9 @@ describe("structured editorial output validation", () => {
     const fact = { id: "fact_1", claimText: "Fakta didukung sumber", supportStatus: "SUPPORTED", evidenceNote: "Pernyataan dalam sumber", sourceReferenceId: "ref_1" };
     const references = [{ id: "ref_1", retrievalStatus: "SUCCESS" }];
     expect(validateDraftEvidence(draft, [fact], references)).toEqual(draft);
-    expect(() => validateDraftEvidence(draft, [{ ...fact, supportStatus: "CONFLICTED" }], references)).toThrow(/conflicted|unverified/);
-    expect(() => validateDraftEvidence(draft, [fact], [])).toThrow(/unfetched/);
-    expect(() => validateDraftEvidence(draft, [], references)).toThrow(/unknown/);
+    expect(() => validateDraftEvidence(draft, [{ ...fact, supportStatus: "CONFLICTED" }], references)).toThrow(/marked CONFLICTED/);
+    expect(() => validateDraftEvidence(draft, [fact], [])).toThrow(/not fetched successfully/);
+    expect(() => validateDraftEvidence(draft, [], references)).toThrow(/was not supplied/);
   });
   it("rejects claims whose evidence links have no source-fact identifier", () => {
     expect(() => articleDraftSchema.parse({ title: "Pembaruan kebijakan energi nasional", excerpt: "Ringkasan informasi yang cukup panjang untuk editor.", body: "Isi artikel berdasarkan narasi yang diberikan. ".repeat(4), suggestedCategory: "Energi", tags: [], seoTitle: "Pembaruan", metaDescription: "Ringkasan", slugSuggestion: "energi", imageBrief: "Ilustrasi editorial", claimsUsed: [{ claimText: "Fakta diklaim tetapi tidak ada evidence ID." }], uncertainties: [] })).toThrow();
@@ -82,6 +83,15 @@ describe("approval-time evidence snapshots", () => {
       sourceFacts: [{ id: "fact-1", claimText: "Claim text", supportStatus: "SUPPORTED", evidenceNote: "Confirmed on page", sourceReferenceId: "ref-1" }],
       sourceReferences: [{ id: "ref-1", url: "https://example.test/story", title: "Story", publisherName: "Example", retrievedAt: "2026-01-02T03:04:05.000Z" }]
     });
+  });
+  it("drops sourceReferenceId when the referenced fetch did not succeed", () => {
+    const brief = {
+      facts: [{ id: "fact-2", claimText: "Unverified claim", supportStatus: "UNVERIFIED", evidenceNote: "", sourceReferenceId: "ref-failed" }],
+      references: [{ id: "ref-failed", url: "https://example.test/blocked", canonicalUrl: null, title: "", publisherName: "", retrievalStatus: "BLOCKED", retrievedAt: null }]
+    };
+    const snapshot = createEditorialEvidenceSnapshot(brief);
+    expect(snapshot.sourceFacts[0]?.sourceReferenceId).toBeNull();
+    expect(snapshot.sourceReferences).toEqual([]);
   });
 });
 
@@ -154,5 +164,79 @@ describe("AI integration readiness", () => {
     vi.stubEnv("AI_PROVIDER", "unknown-provider");
     vi.stubEnv("AI_API_KEY", "present-but-not-supported");
     expect(aiConfiguration()).toMatchObject({ configured: false, mode: "unsupported provider" });
+  });
+  it("retries a fabricated fact id with corrective feedback and keeps the draft when the second answer is valid", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false");
+    vi.stubEnv("AI_PROVIDER", "openrouter");
+    vi.stubEnv("AI_API_KEY", "test-token");
+    vi.stubEnv("AI_MODEL", "qwen/qwen3-235b-a22b-2507");
+    const base = { excerpt: "Ringkasan kegiatan patroli yang dilaporkan humas.", body: "Patroli digelar di titik rawan. ".repeat(6), suggestedCategory: "Hukum", tags: [], seoTitle: "Patroli Cipta Kondisi", metaDescription: "Laporan humas patroli kamtibmas.", slugSuggestion: "patroli-cipta-kondisi", imageBrief: "Ilustrasi patroli; bukan foto dokumenter.", uncertainties: ["Laporan humas belum diverifikasi mandiri."] };
+    const fabricated = { ...base, title: "Patroli Cipta Kondisi Polres Metro Tangerang Kota", claimsUsed: [{ claimText: "Patroli digelar di titik rawan.", sourceFactIds: ["fact-halusan-model"] }] };
+    const corrected = { ...base, title: "Patroli Cipta Kondisi Polres Metro Tangerang Kota", claimsUsed: [{ claimText: "Patroli digelar di titik rawan.", sourceFactIds: [] }] };
+    const responses = [fabricated, corrected];
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      return Response.json({ choices: [{ message: { content: JSON.stringify(responses.shift()) } }], usage: {} });
+    }));
+    const result = await generateDraft(
+      { workingTitle: "Patroli Cipta Kondisi", narrative: "Polres menggelar patroli.", editorNotes: "", sourceSummary: null, references: [], facts: [] },
+      { displayName: "dawda", profile: { niche: "berita lokal", targetAudience: "masyarakat umum", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 }, categories: [{ name: "Hukum" }] }
+    );
+    expect(result.draft.claimsUsed[0]?.sourceFactIds).toEqual([]);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toContain("must be fixed");
+    expect(bodies[1]).toContain("was not supplied");
+    expect(bodies[0]).toContain("MUST have an empty sourceFactIds array");
+  });
+  it("appends active skill guidance to the drafting requirements", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false");
+    vi.stubEnv("AI_PROVIDER", "openrouter");
+    vi.stubEnv("AI_API_KEY", "test-token");
+    vi.stubEnv("AI_MODEL", "qwen/qwen3-235b-a22b-2507");
+    const draft = { title: "Patroli Cipta Kondisi Polres Metro Tangerang Kota", excerpt: "Ringkasan kegiatan patroli yang dilaporkan humas.", body: "Patroli digelar di titik rawan. ".repeat(6), suggestedCategory: "Hukum", tags: ["patroli"], seoTitle: "Patroli Cipta Kondisi", metaDescription: "Laporan humas patroli kamtibmas.", slugSuggestion: "patroli-cipta-kondisi", imageBrief: "Ilustrasi patroli; bukan foto dokumenter.", claimsUsed: [], uncertainties: ["Laporan humas belum diverifikasi mandiri."] };
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      return Response.json({ choices: [{ message: { content: JSON.stringify(draft) } }], usage: {} });
+    }));
+    const skill = getWritingSkill("humas-instansi")!;
+    await generateDraft(
+      { workingTitle: "Patroli Cipta Kondisi", narrative: "Polres menggelar patroli.", editorNotes: "", sourceSummary: null, references: [], facts: [] },
+      { displayName: "dawda", profile: { niche: "berita lokal", targetAudience: "masyarakat umum", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 }, categories: [{ name: "Hukum" }] },
+      undefined, undefined, skill.promptGuidance
+    );
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const body = String(calls[0]![1]?.body);
+    expect(body).toContain(skill.promptGuidance.slice(0, 80));
+    expect(body).toContain("Stylistic guidance (skill)");
+  });
+});
+
+describe("writing skills", () => {
+  it("exposes the institutional humas skill with concrete guidance", () => {
+    const skill = getWritingSkill("humas-instansi");
+    expect(skill).toBeDefined();
+    expect(skill!.name).toContain("humas");
+    expect(skill!.promptGuidance).toMatch(/judul informatif/i);
+    expect(skill!.promptGuidance).toMatch(/jangan menambahkan kutipan, data/i);
+  });
+  it("returns only enabled active skills' guidance from a media site", async () => {
+    const db = {
+      mediaWritingSkill: {
+        findMany: vi.fn(async ({ where }) => {
+          if (where.mediaSiteId === "media-1" && where.enabled === true) {
+            return [
+              { skill: { promptGuidance: "Skill A guidance" } },
+              { skill: { promptGuidance: "Skill B guidance" } },
+            ];
+          }
+          return [];
+        }),
+      },
+    };
+    const guidance = await enabledWritingGuidance(db as never, "media-1");
+    expect(guidance).toContain("Skill A guidance");
+    expect(guidance).toContain("Skill B guidance");
+    expect(await enabledWritingGuidance(db as never, "media-2")).toBe("");
   });
 });
