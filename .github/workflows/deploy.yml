@@ -1,0 +1,58 @@
+# Builds the image on GitHub's runner (not on the laptop or the VPS) and replaces the two containers over SSH.
+# Required repository secrets: DEPLOY_SSH_KEY (private key allowed to log in as DEPLOY_USER), DEPLOY_HOST, DEPLOY_USER.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: nnms:prod
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Prepare SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Send image to the server
+        run: |
+          docker save nnms:prod | gzip | ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" 'gunzip | docker load'
+
+      - name: Replace containers
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" 'bash -s' <<'REMOTE'
+          set -e
+          docker rm -f nnms-admin nnms-public >/dev/null 2>&1 || true
+          for m in admin public; do
+            p=3101; [ "$m" = public ] && p=3100
+            docker run -d --name "nnms-$m" --restart unless-stopped --network nnms-net --memory 256m \
+              --env-file /opt/nnms/.env.production -e APP_MODE="$m" -p "127.0.0.1:$p:3000" nnms:prod >/dev/null
+            docker network connect saturoom-app_edge "nnms-$m"
+          done
+          docker image prune -f >/dev/null
+          sleep 8
+          curl -fsS -o /dev/null -H "Host: $(grep '^ADMIN_BASE_URL=' /opt/nnms/.env.production | cut -d= -f2- | sed 's#https\?://##; s#/.*##')" http://localhost:3101/login
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: health.invalid' http://localhost:3100/robots.txt)" = 200
+          REMOTE

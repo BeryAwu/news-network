@@ -32,3 +32,14 @@ The bundled Caddy is not used on the shared VPS. The containers join the existin
 ## Adding a media domain (shared VPS, no server edit)
 
 The shared Caddy uses on-demand TLS gated by `nnms-public:3000/domain-check`. To add a media domain: point its A record at `PUBLIC_SERVER_IP`, add the hostname under the media in the dashboard, press Konfirmasi, open the address once. Do not add per-domain Caddy blocks. Cloudflare proxying must be off for the record (the certificate challenge needs a direct connection).
+
+## Automatic deploy (GitHub Actions)
+
+`.github/workflows/deploy.yml` builds the image on a GitHub runner and replaces `nnms-admin` and `nnms-public` over SSH on every push to `main` (or by hand from the Actions tab). Nothing is built on the laptop or the VPS.
+
+One-time setup in GitHub: Settings, Secrets and variables, Actions, New repository secret:
+- `DEPLOY_HOST`: the VPS address.
+- `DEPLOY_USER`: the SSH user (root today).
+- `DEPLOY_SSH_KEY`: a private key whose public half is in that user's `~/.ssh/authorized_keys`. Make a dedicated key (`ssh-keygen -t ed25519 -f deploy_key`), never reuse a personal one.
+
+Migrations are NOT run by the workflow: apply them first with `npx prisma migrate deploy` against the production database (additive migrations are safe while the old version still runs).
