@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { decryptSecret, encryptSecret } from "../lib/secrets";
+import { keyConsequence } from "../lib/ai-settings";
 
 beforeAll(() => { process.env.SESSION_SECRET = "a-long-secret-for-tests-".repeat(2); });
 afterEach(() => { process.env.SESSION_SECRET = "a-long-secret-for-tests-".repeat(2); });
@@ -23,5 +24,16 @@ describe("stored secrets", () => {
     expect(decryptSecret("not-a-blob")).toBeNull();
     process.env.SESSION_SECRET = "a-different-long-secret-".repeat(2);
     expect(decryptSecret(blob)).toBeNull();
+  });
+});
+
+describe("key rotation rules", () => {
+  it("maps provider failures to a rest period or a rejection, and ignores unrelated errors", async () => {
+    
+    const now = new Date("2026-01-01T00:00:00Z");
+    expect(keyConsequence(402, now)).toMatchObject({ status: "cooldown", cooldownUntil: new Date("2026-01-01T06:00:00Z") });
+    expect(keyConsequence(429, now)).toMatchObject({ status: "cooldown", cooldownUntil: new Date("2026-01-01T00:05:00Z") });
+    expect(keyConsequence(401, now)).toMatchObject({ status: "rejected", cooldownUntil: null });
+    expect(keyConsequence(500, now)).toBeNull();
   });
 });

@@ -26,5 +26,5 @@ export default async function DashboardLayout({ children }: Readonly<{ children:
     </div>
   );
 
-  return <div className={`app ${appFont.variable}`}><DashboardShell reviewCount={reviewCount} footer={footer}>{children}</DashboardShell></div>;
+  return <div className={`app ${appFont.variable}`}><DashboardShell reviewCount={reviewCount} roles={user.roles.map((assignment) => assignment.role)} footer={footer}>{children}</DashboardShell></div>;
 }

@@ -29,7 +29,7 @@ describe("content security policy", () => {
 
 describe("APP_MODE split deployments", () => {
   it("public mode serves only the public site routes", async () => {
-    for (const path of ["/", "/articles/a-slug", "/kategori/ekonomi", "/rss.xml", "/sitemap.xml", "/robots.txt", "/domain-check"]) expect(await status("public", path)).toBe(200);
+    for (const path of ["/", "/articles/a-slug", "/kategori/ekonomi", "/rss.xml", "/sitemap.xml", "/robots.txt", "/domain-check", "/site-icon"]) expect(await status("public", path)).toBe(200);
     for (const path of ["/dashboard", "/login", "/api/auth/login", "/api/articles", "/articles", "/articles/a/b"]) expect(await status("public", path)).toBe(404);
   });
 

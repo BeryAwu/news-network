@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The dashboard key lives in the database; tests control it here instead of touching one.
-const override = vi.hoisted(() => ({ value: { apiKey: null as string | null, model: null as string | null, hint: "", updatedAt: null as Date | null, updatedByName: "", unreadable: false } }));
-vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiOverride: async () => override.value }));
+type FakeKey = { id: string; secret: string | null; status: "ok" | "cooldown" | "rejected"; cooldownUntil: Date | null };
+const saved = vi.hoisted(() => ({ keys: [] as FakeKey[], model: null as string | null, outcomes: [] as { id: string; outcome: unknown }[] }));
+vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiSettings: async () => ({ keys: saved.keys.map((key, position) => ({ label: "", hint: "", lastError: "", lastUsedAt: null, position, addedByName: "", ...key })), model: saved.model }), recordKeyOutcome: async (id: string, outcome: unknown) => { saved.outcomes.push({ id, outcome }); } }));
+const key = (id: string, secret: string | null, extra: Partial<FakeKey> = {}): FakeKey => ({ id, secret, status: "ok", cooldownUntil: null, ...extra });
 import { aiConfiguration, articleDraftSchema, generateDraft, plainAiFailure, validateDraftEvidence } from "../lib/ai";
 import { checkOpenRouterKey } from "../lib/ai-settings";
 import { parsePage, robotsAllows } from "../lib/ingest";
@@ -247,21 +249,21 @@ describe("writing skills", () => {
 });
 
 describe("AI key managed from the dashboard", () => {
-  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); override.value = { apiKey: null, model: null, hint: "", updatedAt: null, updatedByName: "", unreadable: false }; });
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); saved.keys = []; saved.model = null; saved.outcomes = []; });
   const draftJson = { title: "Judul berita uji untuk kunci", excerpt: "Ringkasan berita uji yang cukup panjang.", body: "Isi berita uji. ".repeat(20), suggestedCategory: "Umum", tags: [], seoTitle: "s", metaDescription: "m", slugSuggestion: "judul", imageBrief: "", claimsUsed: [], uncertainties: [] };
   const brief = { workingTitle: "Judul", narrative: "n", editorNotes: "", sourceSummary: null, references: [], facts: [] };
   const media = { displayName: "Berita", profile: { niche: "", targetAudience: "", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 }, categories: [] };
 
   it("prefers the dashboard key over the server environment, and reports where it came from", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openrouter"); vi.stubEnv("AI_API_KEY", "env-key"); vi.stubEnv("AI_MODEL", "");
-    override.value = { ...override.value, apiKey: "dashboard-key-1234", hint: "1234" };
+    saved.keys = [key("a", "dashboard-key-1234")];
     expect(await aiConfiguration()).toMatchObject({ configured: true, provider: "openrouter", keySource: "dashboard" });
   });
 
   it("works with no server key at all once the owner saved one, and never leaks the key in the public config", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", ""); vi.stubEnv("AI_API_KEY", "");
     expect((await aiConfiguration()).configured).toBe(false);
-    override.value = { ...override.value, apiKey: "dashboard-key-1234", model: "qwen/qwen3-32b" };
+    saved.keys = [key("a", "dashboard-key-1234")]; saved.model = "qwen/qwen3-32b";
     const config = await aiConfiguration();
     expect(config).toMatchObject({ configured: true, model: "qwen/qwen3-32b", keySource: "dashboard" });
     expect(JSON.stringify(config)).not.toContain("dashboard-key-1234");
@@ -272,7 +274,7 @@ describe("AI key managed from the dashboard", () => {
     const seen: { auth: string; model: string; url: string }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => { seen.push({ url, auth: String((init.headers as Record<string, string>).authorization), model: JSON.parse(String(init.body)).model }); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draftJson) } }], usage: {} })); }));
     await generateDraft(brief, media);
-    override.value = { ...override.value, apiKey: "brand-new-key", model: "qwen/qwen3-32b" };
+    saved.keys = [key("a", "brand-new-key")]; saved.model = "qwen/qwen3-32b";
     await generateDraft(brief, media);
     expect(seen[0]).toMatchObject({ auth: "Bearer old-env-key", model: "qwen/qwen3-235b-a22b-2507" });
     expect(seen[1]).toMatchObject({ auth: "Bearer brand-new-key", model: "qwen/qwen3-32b" });
@@ -281,11 +283,41 @@ describe("AI key managed from the dashboard", () => {
 
   it("never sends the dashboard key to a custom base URL", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openai-compatible"); vi.stubEnv("AI_API_KEY", "x"); vi.stubEnv("AI_BASE_URL", "https://evil.example/v1");
-    override.value = { ...override.value, apiKey: "brand-new-key" };
+    saved.keys = [key("a", "brand-new-key")];
     const urls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => { urls.push(url); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draftJson) } }] })); }));
     await generateDraft(brief, media);
     expect(urls[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+
+  it("switches to the next key when one has no credit, and rests the dead key", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openrouter"); vi.stubEnv("AI_API_KEY", "env-key"); vi.stubEnv("AI_MODEL", "");
+    saved.keys = [key("one", "key-one-key-one-1234"), key("two", "key-two-key-two-5678")];
+    const auths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => { const auth = String((init.headers as Record<string, string>).authorization); auths.push(auth); return auth.includes("key-one") ? new Response("{}", { status: 402 }) : new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draftJson) } }] })); }));
+    const result = await generateDraft(brief, media);
+    expect(result.draft.title).toBe(draftJson.title);
+    expect(auths).toEqual(["Bearer key-one-key-one-1234", "Bearer key-two-key-two-5678"]);
+    expect(saved.outcomes).toEqual([{ id: "one", outcome: { httpStatus: 402 } }, { id: "two", outcome: { ok: true } }]);
+  });
+
+  it("skips resting and rejected keys, uses the server key last, and stops when every key fails", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openrouter"); vi.stubEnv("AI_API_KEY", "env-key"); vi.stubEnv("AI_MODEL", "");
+    const later = new Date(Date.now() + 3600_000);
+    saved.keys = [key("bad", "rejected-key-0000000", { status: "rejected" }), key("rest", "resting-key-1111111", { status: "cooldown", cooldownUntil: later }), key("gone", null), key("good", "good-key-good-2222")];
+    const auths: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => { auths.push(String((init.headers as Record<string, string>).authorization)); return new Response("{}", { status: 429 }); }));
+    await expect(generateDraft(brief, media)).rejects.toMatchObject({ status: 429 });
+    expect(auths).toEqual(["Bearer good-key-good-2222", "Bearer resting-key-1111111", "Bearer env-key"]);
+  });
+
+  it("does not burn through keys for an error that is not about the key", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openrouter"); vi.stubEnv("AI_API_KEY", "");
+    saved.keys = [key("a", "key-aaaa-aaaa-aaaa"), key("b", "key-bbbb-bbbb-bbbb")];
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generateDraft(brief, media)).rejects.toMatchObject({ status: 500 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("tests a key against OpenRouter and says why it fails, so a bad key is never saved", async () => {

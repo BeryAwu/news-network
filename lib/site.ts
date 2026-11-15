@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { normalizeHostname } from "@/lib/security";
 import { editorialEvidenceSnapshotSchema } from "@/lib/editorial-evidence";
+import { DEFAULT_THEME_SLUG, THEME_SLUGS, themeInfo, type SiteThemeSlug } from "@/lib/site-themes";
 
 export const SITE_PAGE_SIZE = 12;
 
@@ -33,14 +34,16 @@ export const publishedSnapshotSchema = z.object({
 export type PublishedSnapshot = z.infer<typeof publishedSnapshotSchema>;
 
 const themeSchema = z.object({
-  primary: z.string().regex(/^#[0-9a-fA-F]{6}$/).catch("#176b4a"),
+  primary: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().catch(null),
   tagline: z.string().max(160).catch(""),
   logoUrl: z.string().url().startsWith("https://res.cloudinary.com/").nullable().catch(null),
+  template: z.enum(THEME_SLUGS).catch(DEFAULT_THEME_SLUG),
 });
-export type SiteTheme = z.infer<typeof themeSchema>;
+export interface SiteTheme { primary: string; tagline: string; logoUrl: string | null; template: SiteThemeSlug }
 export function parseTheme(raw: unknown): SiteTheme {
   const input = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
-  return themeSchema.parse({ primary: input.primary, tagline: input.tagline ?? "", logoUrl: input.logoUrl ?? null });
+  const parsed = themeSchema.parse({ primary: input.primary ?? null, tagline: input.tagline ?? "", logoUrl: input.logoUrl ?? null, template: input.template ?? DEFAULT_THEME_SLUG });
+  return { ...parsed, primary: parsed.primary ?? themeInfo(parsed.template).defaultColor };
 }
 
 export async function requestHostname() {

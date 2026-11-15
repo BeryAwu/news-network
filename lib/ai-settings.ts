@@ -1,64 +1,110 @@
+import { randomBytes } from "node:crypto";
 import { db } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "@/lib/secrets";
 
-const KEY_API = "ai.openrouter.apiKey";
+const KEY_PREFIX = "ai.key.";
 const KEY_MODEL = "ai.model";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-235b-a22b-2507";
 
-/** What the owner saved in the dashboard. Every field is empty when nothing is saved or the database cannot be read. */
-export interface AiOverride {
-  apiKey: string | null;
-  model: string | null;
-  /** Last characters of the key; safe to show. */
+export type KeyStatus = "ok" | "cooldown" | "rejected";
+
+/** One OpenRouter key the owner saved in the dashboard. `secret` is null when it can no longer be decrypted. */
+export interface StoredAiKey {
+  id: string;
+  label: string;
+  /** Last four characters; safe to show. */
   hint: string;
-  updatedAt: Date | null;
-  updatedByName: string;
-  /** True when a key is stored but cannot be decrypted (SESSION_SECRET changed). */
-  unreadable: boolean;
+  secret: string | null;
+  status: KeyStatus;
+  cooldownUntil: Date | null;
+  lastError: string;
+  lastUsedAt: Date | null;
+  position: number;
+  addedByName: string;
 }
 
-const EMPTY: AiOverride = { apiKey: null, model: null, hint: "", updatedAt: null, updatedByName: "", unreadable: false };
+export interface AiSettings { keys: StoredAiKey[]; model: string | null }
 
-/** Read fresh on every call, so a new key is used by the very next request in any process. Never throws. */
-export async function readAiOverride(): Promise<AiOverride> {
+const EMPTY: AiSettings = { keys: [], model: null };
+
+/** Read fresh on every call, so a change is used by the very next request in any process. Never throws. */
+export async function readAiSettings(): Promise<AiSettings> {
   try {
-    const rows = await db.integrationSetting.findMany({ where: { key: { in: [KEY_API, KEY_MODEL] } } });
-    const keyRow = rows.find((row) => row.key === KEY_API);
+    const rows = await db.integrationSetting.findMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }] } });
     const modelRow = rows.find((row) => row.key === KEY_MODEL);
-    const apiKey = keyRow ? decryptSecret(keyRow.value) : null;
-    return {
-      apiKey,
-      model: modelRow ? decryptSecret(modelRow.value) : null,
-      hint: apiKey && keyRow ? keyRow.hint : "",
-      updatedAt: keyRow?.updatedAt ?? modelRow?.updatedAt ?? null,
-      updatedByName: keyRow?.updatedByName ?? modelRow?.updatedByName ?? "",
-      unreadable: Boolean(keyRow && !apiKey),
-    };
+    const keys = rows
+      .filter((row) => row.key.startsWith(KEY_PREFIX))
+      .map((row): StoredAiKey => ({ id: row.key.slice(KEY_PREFIX.length), label: row.label, hint: row.hint, secret: decryptSecret(row.value), status: (row.status as KeyStatus) || "ok", cooldownUntil: row.cooldownUntil, lastError: row.lastError, lastUsedAt: row.lastUsedAt, position: row.position, addedByName: row.updatedByName }))
+      .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+    return { keys, model: modelRow ? decryptSecret(modelRow.value) : null };
   } catch { return EMPTY; }
 }
 
-export async function saveAiSettings(by: { name: string }, input: { apiKey?: string; model?: string }) {
-  if (input.apiKey) {
-    await db.integrationSetting.upsert({
-      where: { key: KEY_API },
-      create: { key: KEY_API, value: encryptSecret(input.apiKey), hint: input.apiKey.slice(-4), updatedByName: by.name },
-      update: { value: encryptSecret(input.apiKey), hint: input.apiKey.slice(-4), updatedByName: by.name },
-    });
-  }
-  if (input.model) {
-    await db.integrationSetting.upsert({
-      where: { key: KEY_MODEL },
-      create: { key: KEY_MODEL, value: encryptSecret(input.model), updatedByName: by.name },
-      update: { value: encryptSecret(input.model), updatedByName: by.name },
-    });
-  }
+/**
+ * The order in which keys are tried: healthy keys first (a cooldown that has passed counts as healthy),
+ * then keys still cooling down (tried anyway as a last resort), and never rejected or unreadable ones.
+ */
+export function attemptOrder(keys: StoredAiKey[], now = new Date()): StoredAiKey[] {
+  const readable = keys.filter((key) => key.secret && key.status !== "rejected");
+  const healthy = readable.filter((key) => key.status === "ok" || !key.cooldownUntil || key.cooldownUntil <= now);
+  const cooling = readable.filter((key) => !healthy.includes(key)).sort((a, b) => (a.cooldownUntil?.getTime() ?? 0) - (b.cooldownUntil?.getTime() ?? 0));
+  return [...healthy, ...cooling];
 }
 
-/** Removes the dashboard key and model; the server environment takes over again. */
+export async function addAiKey(by: { name: string }, input: { apiKey: string; label?: string }) {
+  const existing = await db.integrationSetting.findMany({ where: { key: { startsWith: KEY_PREFIX } }, select: { position: true } });
+  const id = randomBytes(6).toString("hex");
+  await db.integrationSetting.create({ data: { key: KEY_PREFIX + id, value: encryptSecret(input.apiKey), hint: input.apiKey.slice(-4), label: (input.label ?? "").trim().slice(0, 40), position: existing.length ? Math.max(...existing.map((row) => row.position)) + 1 : 0, updatedByName: by.name } });
+  return id;
+}
+
+export async function removeAiKey(id: string) {
+  await db.integrationSetting.deleteMany({ where: { key: KEY_PREFIX + id } });
+}
+
+/** Makes this key the first one tried; the others keep their relative order. */
+export async function makePrimary(id: string) {
+  const rows = await db.integrationSetting.findMany({ where: { key: { startsWith: KEY_PREFIX } }, orderBy: [{ position: "asc" }, { key: "asc" }], select: { key: true } });
+  const order = [KEY_PREFIX + id, ...rows.map((row) => row.key).filter((key) => key !== KEY_PREFIX + id)];
+  await db.$transaction(order.map((key, position) => db.integrationSetting.update({ where: { key }, data: { position } })));
+}
+
+/** Puts a cooling or rejected key back in rotation (after the owner fixed it, or to try it again). */
+export async function resetAiKey(id: string) {
+  await db.integrationSetting.update({ where: { key: KEY_PREFIX + id }, data: { status: "ok", cooldownUntil: null, lastError: "" } });
+}
+
+export async function saveAiModel(by: { name: string }, model: string) {
+  await db.integrationSetting.upsert({ where: { key: KEY_MODEL }, create: { key: KEY_MODEL, value: encryptSecret(model), updatedByName: by.name }, update: { value: encryptSecret(model), updatedByName: by.name } });
+}
+
+/** Forgets every dashboard key and the model; the server environment takes over again. */
 export async function clearAiSettings() {
-  await db.integrationSetting.deleteMany({ where: { key: { in: [KEY_API, KEY_MODEL] } } });
+  await db.integrationSetting.deleteMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }] } });
+}
+
+const HOUR = 60 * 60 * 1000;
+
+/** What a failed call means for the key. 402/429 are temporary; 401/403 need the owner. Anything else leaves the key alone. */
+export function keyConsequence(status: number, now = new Date()): { status: KeyStatus; cooldownUntil: Date | null; lastError: string } | null {
+  if (status === 402) return { status: "cooldown", cooldownUntil: new Date(now.getTime() + 6 * HOUR), lastError: "Kredit habis" };
+  if (status === 429) return { status: "cooldown", cooldownUntil: new Date(now.getTime() + 5 * 60 * 1000), lastError: "Kena batas permintaan" };
+  if (status === 401 || status === 403) return { status: "rejected", cooldownUntil: null, lastError: "Kunci ditolak OpenRouter" };
+  return null;
+}
+
+/** Best effort: a bookkeeping failure must never break the article being written. */
+export async function recordKeyOutcome(id: string, outcome: { ok: true } | { httpStatus: number }) {
+  try {
+    if ("ok" in outcome) {
+      await db.integrationSetting.updateMany({ where: { key: KEY_PREFIX + id }, data: { status: "ok", cooldownUntil: null, lastError: "", lastUsedAt: new Date() } });
+      return;
+    }
+    const consequence = keyConsequence(outcome.httpStatus);
+    if (consequence) await db.integrationSetting.updateMany({ where: { key: KEY_PREFIX + id }, data: consequence });
+  } catch { /* ignored on purpose */ }
 }
 
 export type KeyCheck =

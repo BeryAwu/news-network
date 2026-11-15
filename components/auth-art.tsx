@@ -1,11 +1,11 @@
-import { Newspaper } from "lucide-react";
+import NewsroomLogo from "@/components/newsroom-logo";
 
 /** Left panel of the login and setup screens: the brand, one plain promise, and a drawn desk (SVG, no photo). */
 export default function AuthArt() {
   return (
     <aside className="auth-art" aria-hidden="false">
       <div className="brand">
-        <span className="brand-mark" aria-hidden="true"><Newspaper size={20} /></span>
+        <span className="brand-mark" aria-hidden="true"><NewsroomLogo size={36} /></span>
         <span>Newsroom<small>Pusat kerja redaksi</small></span>
       </div>
       <h2>Satu tempat untuk semua media Anda.</h2>
@@ -34,7 +34,7 @@ export default function AuthArt() {
 export function AuthBrand() {
   return (
     <div className="auth-brand brand">
-      <span className="brand-mark" aria-hidden="true"><Newspaper size={20} /></span>
+      <span className="brand-mark" aria-hidden="true"><NewsroomLogo size={36} /></span>
       <span>Newsroom<small>Pusat kerja redaksi</small></span>
     </div>
   );

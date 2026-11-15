@@ -8,7 +8,7 @@ import { AUTHOR_COOKIE, AUTHOR_TOKEN_PARAM, signAuthorToken, verifyAuthorToken }
  *  - `public` serves only the public news-site routes; dashboard pages and the API are 404.
  *  - `all`    (default) serves both, for local development.
  */
-const PUBLIC_PATHS = [/^\/$/, /^\/articles\/[^/]+$/, /^\/kategori\/[^/]+$/, /^\/sitemap\.xml$/, /^\/rss\.xml$/, /^\/robots\.txt$/, /^\/domain-check$/];
+const PUBLIC_PATHS = [/^\/$/, /^\/articles\/[^/]+$/, /^\/kategori\/[^/]+$/, /^\/sitemap\.xml$/, /^\/rss\.xml$/, /^\/robots\.txt$/, /^\/domain-check$/, /^\/site-icon$/];
 
 /** Per-request CSP: Next.js reads the nonce from this header and stamps it on its inline bootstrap scripts. */
 function withCsp(request: NextRequest) {

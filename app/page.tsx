@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import { ArticleCard, EmptyState, Pagination, SiteShell } from "@/components/site/shell";
+import { Pagination, SiteShell } from "@/components/site/shell";
+import { loadSiteTheme } from "@/components/site/theme-loader";
 import { listPublished, requestHostname, requestOrigin, resolveSite } from "@/lib/site";
 import { normalizeHostname } from "@/lib/security";
 
@@ -19,6 +20,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const origin = await requestOrigin();
   const description = site.media.description || site.theme.tagline || `Berita terbaru dari ${site.media.displayName}`;
   return {
+    icons: { icon: [{ url: "/site-icon", type: "image/svg+xml" }] },
     title: { absolute: site.media.displayName },
     description,
     alternates: { canonical: origin + "/", types: { "application/rss+xml": origin + "/rss.xml" } },
@@ -34,16 +36,12 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
   const params = await searchParams;
   const q = (params.q ?? "").slice(0, 80);
   const site = await resolveSite();
-  const { items, page, pages, total } = await listPublished(site, { page: Number(params.page) || 1, q });
+  const { items, page, pages } = await listPublished(site, { page: Number(params.page) || 1, q });
   const qs = (n: number) => `/?${new URLSearchParams({ ...(q ? { q } : {}), ...(n > 1 ? { page: String(n) } : {}) }).toString()}`.replace(/\?$/, "");
-  const lead = !q && page === 1 ? items[0] : undefined;
-  const rest = lead ? items.slice(1) : items;
+  const { Home: ThemedHome } = await loadSiteTheme(site.theme.template);
   return (
     <SiteShell site={site} query={q}>
-      {q && <h1 className="site-heading">Hasil untuk “{q}” ({total})</h1>}
-      {items.length === 0
-        ? <EmptyState>{q ? "Tidak ada berita yang cocok." : "Belum ada berita yang diterbitkan."}</EmptyState>
-        : <>{lead && <ArticleCard item={lead} featured />}{rest.length > 0 && <div className="site-grid">{rest.map((item) => <ArticleCard key={item.slug} item={item} />)}</div>}</>}
+      <ThemedHome site={site} items={items} query={q} page={page} />
       <Pagination page={page} pages={pages} hrefFor={qs} />
     </SiteShell>
   );

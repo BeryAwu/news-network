@@ -35,8 +35,8 @@ async function databaseReachable() {
 }
 
 export default async function SettingsPage() {
-  const user = await requireRole("OWNER", "ADMIN");
-  const isOwner = user.roles.some((assignment) => assignment.role === "OWNER");
+  await requireRole("OWNER");
+  const isOwner = true;
   const ai = await aiConfiguration();
   const aiKey = await readAiKeyStatus();
   const databaseReady = await databaseReachable();

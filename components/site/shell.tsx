@@ -1,49 +1,97 @@
 import Image from "next/image";
 import Link from "next/link";
-import localFont from "next/font/local";
 import type { CSSProperties, ReactNode } from "react";
 import "@/app/site.css";
+import { SiteLogoMark } from "@/components/site/logo";
+import { loadSiteTheme } from "@/components/site/theme-loader";
+import { themeInfo } from "@/lib/site-themes";
 import { cloudinaryUrl, type Site, type SiteListItem } from "@/lib/site";
-
-const display = localFont({ src: "../../app/fonts/ZillaSlab-700-latin.woff2", weight: "700", variable: "--nf-display", display: "swap" });
-const body = localFont({ src: [{ path: "../../app/fonts/Spectral-400-latin.woff2", weight: "400", style: "normal" }, { path: "../../app/fonts/Spectral-500-latin.woff2", weight: "500", style: "normal" }, { path: "../../app/fonts/Spectral-400-italic-latin.woff2", weight: "400", style: "italic" }], variable: "--nf-body", display: "swap" });
 
 const dateFormat = new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Jakarta" });
 const longDateFormat = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Jakarta" });
 export function formatDate(date: Date | null) { return date ? dateFormat.format(date) : ""; }
+const timeFormat = new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" });
+export function formatTime(date: Date | null) { return date ? timeFormat.format(date).replace(".", ":") : ""; }
 
-export function SiteShell({ site, children, query = "" }: { site: Site; children: ReactNode; query?: string }) {
+function Brand({ site }: { site: Site }) {
   const { media, theme } = site;
+  const info = themeInfo(theme.template);
+  return (
+    <Link href="/" className="site-brand" aria-label={media.displayName}>
+      {theme.logoUrl
+        ? <Image src={theme.logoUrl} alt={media.displayName} width={180} height={48} className="site-logo" unoptimized />
+        : <><SiteLogoMark shape={info.mark} color={theme.primary} name={media.displayName} /><span className="site-brand-name">{media.displayName}</span></>}
+    </Link>
+  );
+}
+
+function SearchForm({ query }: { query: string }) {
+  return (
+    <form action="/" method="get" role="search" className="site-search">
+      <input name="q" defaultValue={query} placeholder="Cari berita" aria-label="Cari berita" maxLength={80} />
+      <button type="submit" className="site-btn">Cari</button>
+    </form>
+  );
+}
+
+function CategoryNav({ site }: { site: Site }) {
+  if (!site.media.categories.length) return null;
+  return (
+    <nav className="site-nav" aria-label="Kategori">
+      <Link href="/">Terbaru</Link>
+      {site.media.categories.map((c) => <Link key={c.id} href={`/kategori/${c.slug}`}>{c.name}</Link>)}
+    </nav>
+  );
+}
+
+function Header({ site, query, variant }: { site: Site; query: string; variant: string }) {
+  const today = longDateFormat.format(new Date());
+  const tagline = site.theme.tagline;
+  if (variant === "bar") {
+    return (
+      <header className="site-header site-header--bar">
+        <div className="site-wrap site-header-row"><Brand site={site} /><CategoryNav site={site} /><SearchForm query={query} /></div>
+      </header>
+    );
+  }
+  if (variant === "stacked") {
+    return (
+      <header className="site-header site-header--stacked">
+        <div className="site-topline"><div className="site-wrap site-topline-row"><span>{today}</span>{tagline && <span>{tagline}</span>}</div></div>
+        <div className="site-wrap site-header-row"><Brand site={site} /><SearchForm query={query} /></div>
+        <div className="site-navband"><div className="site-wrap"><CategoryNav site={site} /></div></div>
+      </header>
+    );
+  }
+  if (variant === "minimal") {
+    return (
+      <header className="site-header site-header--minimal">
+        <div className="site-wrap site-header-row"><Brand site={site} />{tagline && <p className="site-tagline-inline">{tagline}</p>}</div>
+        <div className="site-wrap site-header-sub"><CategoryNav site={site} /><SearchForm query={query} /></div>
+      </header>
+    );
+  }
+  return (
+    <header className="site-header site-header--center">
+      <div className="site-wrap">
+        <div className="site-masthead"><Brand site={site} /><SearchForm query={query} /></div>
+        <div className="site-dateline site-small"><span>{today}</span>{tagline && <span>{tagline}</span>}</div>
+        <hr className="site-rule-double" />
+        <CategoryNav site={site} />
+        <hr className="site-rule-double" />
+      </div>
+    </header>
+  );
+}
+
+export async function SiteShell({ site, children, query = "" }: { site: Site; children: ReactNode; query?: string }) {
+  const { media, theme } = site;
+  const info = themeInfo(theme.template);
+  const mod = await loadSiteTheme(info.slug);
   const style = { "--color-brand": theme.primary } as CSSProperties;
   return (
-    <div className={`site ${display.variable} ${body.variable}`} style={style}>
-      <header className="site-header">
-        <div className="site-wrap">
-          <div className="site-masthead">
-            <Link href="/" className="site-brand" aria-label={media.displayName}>
-              {theme.logoUrl
-                ? <Image src={theme.logoUrl} alt={media.displayName} width={180} height={48} className="site-logo" unoptimized />
-                : <span className="site-brand-name">{media.displayName}</span>}
-            </Link>
-            <form action="/" method="get" role="search" className="site-search">
-              <input name="q" defaultValue={query} placeholder="Cari berita" aria-label="Cari berita" maxLength={80} />
-              <button type="submit" className="site-btn">Cari</button>
-            </form>
-          </div>
-          <div className="site-dateline site-small">
-            <span>{longDateFormat.format(new Date())}</span>
-            {theme.tagline && <span>{theme.tagline}</span>}
-          </div>
-          <hr className="site-rule-double" />
-          {media.categories.length > 0 && (
-            <nav className="site-nav" aria-label="Kategori">
-              <Link href="/">Terbaru</Link>
-              {media.categories.map((c) => <Link key={c.id} href={`/kategori/${c.slug}`}>{c.name}</Link>)}
-            </nav>
-          )}
-          <hr className="site-rule-double" />
-        </div>
-      </header>
+    <div className={`site t-${info.slug} ${mod.fonts.map((font) => font.variable).join(" ")}`} data-dark={info.dark ? "true" : undefined} style={style}>
+      <Header site={site} query={query} variant={info.header} />
       <main className="site-wrap site-main">{children}</main>
       <footer className="site-footer">
         <div className="site-wrap">

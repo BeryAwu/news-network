@@ -13,7 +13,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const origin = await requestOrigin();
   const title = `${category.name} · ${site.media.displayName}`;
   const description = category.description || `Berita ${category.name} terbaru dari ${site.media.displayName}`;
-  return { title: { absolute: title }, description, alternates: { canonical: `${origin}/kategori/${category.slug}` }, openGraph: { type: "website", title, description, siteName: site.media.displayName, url: `${origin}/kategori/${category.slug}` } };
+  return { icons: { icon: [{ url: "/site-icon", type: "image/svg+xml" }] }, title: { absolute: title }, description, alternates: { canonical: `${origin}/kategori/${category.slug}` }, openGraph: { type: "website", title, description, siteName: site.media.displayName, url: `${origin}/kategori/${category.slug}` } };
 }
 
 export default async function CategoryPage({ params, searchParams }: Props) {

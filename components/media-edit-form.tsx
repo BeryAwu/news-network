@@ -1,4 +1,5 @@
 "use client";
+import { DEFAULT_THEME_SLUG, SITE_THEMES } from "@/lib/site-themes";
 
 import "@/app/css/media.css";
 import { useRef, useState } from "react";
@@ -49,9 +50,10 @@ function contrastAgainstWhite(hex: string) {
 export default function MediaEditForm({ site }: { site: Site }) {
   const router = useRouter();
   const advancedRef = useRef<HTMLDetailsElement>(null);
-  const theme = (typeof site.themeConfig === "object" && site.themeConfig !== null ? site.themeConfig : {}) as { primary?: string; tagline?: string; logoUrl?: string | null };
+  const theme = (typeof site.themeConfig === "object" && site.themeConfig !== null ? site.themeConfig : {}) as { primary?: string; tagline?: string; logoUrl?: string | null; template?: string };
   const profile = site.profile;
   const [displayName, setDisplayName] = useState(site.displayName);
+  const [template, setTemplate] = useState(theme.template || DEFAULT_THEME_SLUG);
   const [primary, setPrimary] = useState(theme.primary || "");
   const [tagline, setTagline] = useState(theme.tagline || "");
   const [logoUrl, setLogoUrl] = useState(theme.logoUrl || "");
@@ -144,6 +146,18 @@ export default function MediaEditForm({ site }: { site: Site }) {
       <div className="form-intro"><h3>Tampilan situs</h3><p>Warna dan tagline muncul di situs publik. Pratinjau berubah saat Anda mengetik.</p></div>
       <div className="theme-layout">
         <div className="stack">
+          <fieldset className="field">
+            <legend className="field-label">Desain situs</legend>
+            <div className="choice-list">
+              {SITE_THEMES.map((item) => (
+                <label className="choice" key={item.slug}>
+                  <input type="radio" name="themeTemplate" value={item.slug} checked={template === item.slug} onChange={() => setTemplate(item.slug)}/>
+                  <span className="choice-copy"><strong>{item.name}</strong><small>{item.description}</small></span>
+                </label>
+              ))}
+            </div>
+            <span className="field-help">Tiap media bisa punya desain berbeda. Berita yang sudah terbit ikut tampil dengan desain baru.</span>
+          </fieldset>
           <div className="field">
             <label htmlFor={id("themePrimary")}>Warna utama</label>
             <div className="color-row">
@@ -151,7 +165,7 @@ export default function MediaEditForm({ site }: { site: Site }) {
               <input {...props("themePrimary")} value={primary} onChange={(event) => setPrimary(event.target.value.trim())} maxLength={7} placeholder={DEFAULT_BRAND} spellCheck={false} autoComplete="off" inputMode="text" className="color-hex"/>
               <button type="button" className="btn btn-quiet" onClick={() => setPrimary("")} disabled={!primary}>Pakai warna bawaan</button>
             </div>
-            {help("themePrimary", "Dipakai untuk tombol dan tautan di situs. Kosong berarti warna hijau bawaan.")}
+            {help("themePrimary", "Dipakai untuk tombol dan tautan di situs. Kosong berarti warna bawaan dari desain yang dipilih.")}
             {tooLight && <p className="field-error">Warna ini terang. Tulisan putih di tombol akan sulit dibaca, jadi pilih yang lebih gelap.</p>}
           </div>
           <div className="field">

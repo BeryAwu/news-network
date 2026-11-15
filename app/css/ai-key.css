@@ -5,6 +5,13 @@
   .ai-key-status > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--app-s3); }
   .ai-key-status dt { color: var(--app-muted); font-weight: 600; }
   .ai-key-status dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+  .ai-key-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--app-s3); }
+  .ai-key-item { display: flex; justify-content: space-between; align-items: center; gap: var(--app-s4); flex-wrap: wrap; padding: var(--app-s4); border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); }
+  .ai-key-main { display: grid; gap: var(--app-s1); min-width: 0; }
+  .ai-key-state { font-weight: 700; }
+  .ai-key-ok { color: var(--app-success); }
+  .ai-key-warn { color: var(--app-warn); }
+  .ai-key-bad { color: var(--app-danger); }
   .ai-key .advanced summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 700; color: var(--app-link); }
   .ai-key .advanced summary:focus-visible { outline: 3px solid var(--app-focus); outline-offset: 2px; }
   .ai-key .advanced summary:active { color: var(--app-ink); }

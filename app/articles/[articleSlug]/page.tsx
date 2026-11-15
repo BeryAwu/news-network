@@ -31,6 +31,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const description = snapshot.metaDescription || snapshot.excerpt;
   const image = snapshot.featuredAsset ? cloudinaryUrl(snapshot.featuredAsset.secureUrl, "f_auto,q_auto,c_fill,w_1200,h_630") : undefined;
   return {
+    icons: { icon: [{ url: "/site-icon", type: "image/svg+xml" }] },
     title: { absolute: `${title} · ${site.media.displayName}` }, description, keywords: snapshot.tags, alternates: { canonical: url },
     openGraph: { type: "article", title, description, url, siteName: site.media.displayName, publishedTime: found.publishedAt?.toISOString(), tags: snapshot.tags, ...(image ? { images: [{ url: image, width: 1200, height: 630, alt: snapshot.featuredAsset?.altText }] } : {}) },
     twitter: { card: image ? "summary_large_image" : "summary", title, description, ...(image ? { images: [image] } : {}) },

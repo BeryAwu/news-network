@@ -570,9 +570,18 @@ model AuditLog {
 /// Secrets and settings the owner changes from the dashboard instead of the server environment.
 /// `value` is AES-256-GCM ciphertext (see lib/secrets.ts); `hint` is the non-secret tail shown in the UI.
 model IntegrationSetting {
-  key           String   @id
-  value         String   @db.Text
-  hint          String   @default("")
-  updatedByName String   @default("")
-  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+  key           String    @id
+  value         String    @db.Text
+  hint          String    @default("")
+  /// Owner-chosen name of an API key (for example "Akun cadangan").
+  label         String    @default("")
+  /// Keys are tried in ascending position; the first healthy one is used.
+  position      Int       @default(0)
+  /// ok | cooldown (limit or no credit, retried later) | rejected (needs the owner)
+  status        String    @default("ok")
+  cooldownUntil DateTime? @db.Timestamptz(3)
+  lastError     String    @default("")
+  lastUsedAt    DateTime? @db.Timestamptz(3)
+  updatedByName String    @default("")
+  updatedAt     DateTime  @updatedAt @db.Timestamptz(3)
 }
