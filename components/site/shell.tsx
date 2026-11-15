@@ -88,7 +88,8 @@ export async function SiteShell({ site, children, query = "" }: { site: Site; ch
   const { media, theme } = site;
   const info = themeInfo(theme.template);
   const mod = await loadSiteTheme(info.slug);
-  const style = { "--color-brand": theme.primary } as CSSProperties;
+  // next/font names each family after its variable, so every design owns unique names; map them back to the generic ones the stylesheets use.
+  const style = { "--color-brand": theme.primary, "--nf-display": `var(--nf-${info.slug}-display)`, "--nf-body": `var(--nf-${info.slug}-body)`, "--nf-outlier": `var(--nf-${info.slug}-outlier)` } as CSSProperties;
   return (
     <div className={`site t-${info.slug} ${mod.fonts.map((font) => font.variable).join(" ")}`} data-dark={info.dark ? "true" : undefined} style={style}>
       <Header site={site} query={query} variant={info.header} />

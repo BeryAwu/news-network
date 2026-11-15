@@ -7,7 +7,7 @@ import type { HomeProps, SiteThemeModule } from "@/components/site/theme-types";
 import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 
 // One compact variable family for the whole design.
-const display = localFont({ src: "../../../app/fonts/IBMPlexSans-latin.woff2", weight: "400 700", variable: "--nf-display", display: "swap", preload: false });
+const display = localFont({ src: "../../../app/fonts/IBMPlexSans-latin.woff2", weight: "400 700", variable: "--nf-daftar-display", display: "swap", preload: false });
 
 const dayFormat = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" });
 const DAY_MS = 24 * 60 * 60 * 1000;
