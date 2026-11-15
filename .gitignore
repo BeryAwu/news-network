@@ -11,3 +11,6 @@ coverage/
 !.env.example
 !.env.*.example
 .DS_Store
+
+# Hallmark skill working files
+.hallmark/

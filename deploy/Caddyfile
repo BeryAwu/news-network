@@ -1,0 +1,22 @@
+{
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		# Certificates are issued only for hostnames that are an active, verified media domain.
+		ask http://public:3000/domain-check
+	}
+}
+
+# Dashboard host.
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy admin:3000
+}
+
+# Every verified media domain pointed at this server.
+https:// {
+	tls {
+		on_demand
+	}
+	encode zstd gzip
+	reverse_proxy public:3000
+}

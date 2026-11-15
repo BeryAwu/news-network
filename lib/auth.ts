@@ -21,9 +21,18 @@ export async function currentUser() {
   try {
     const { payload } = await jwtVerify(token, sessionKey());
     if (typeof payload.sub !== "string") return null;
-    return await db.user.findFirst({ where: { id: payload.sub, status: "ACTIVE" }, include: { roles: true, mediaScopes: true } });
+    const user = await db.user.findFirst({ where: { id: payload.sub, status: "ACTIVE" }, include: { roles: true, mediaScopes: true } });
+    return user && withImpliedRoles(user);
   } catch { return null; }
 }
+/** OPERATOR is a bundle: it implies the daily-work roles so every existing role check passes without per-route changes. */
+const OPERATOR_IMPLIES: Role[] = ["EDITOR", "REVIEWER", "PUBLISHER"];
+function withImpliedRoles<T extends { id: string; roles: { userId: string; role: Role }[] }>(user: T): T {
+  if (!user.roles.some((assignment) => assignment.role === "OPERATOR")) return user;
+  const have = new Set(user.roles.map((assignment) => assignment.role));
+  return { ...user, roles: [...user.roles, ...OPERATOR_IMPLIES.filter((role) => !have.has(role)).map((role) => ({ userId: user.id, role }))] };
+}
+
 export async function requireUser() {
   const user = await currentUser();
   if (!user) throw new AuthError("Authentication required.", 401);
@@ -60,7 +69,8 @@ export async function requireMediaAccess(userId: string, mediaSiteId: string) {
   if (!(await canAccessMedia(userId, mediaSiteId))) throw new AuthError("You do not have access to this media site.", 403);
 }
 export async function hasAnyRole(userId: string, roles: Role[]) {
-  return Boolean(await db.userRole.findFirst({ where: { userId, role: { in: roles } } }));
+  const expanded = roles.some((role) => OPERATOR_IMPLIES.includes(role)) ? [...roles, "OPERATOR" as Role] : roles;
+  return Boolean(await db.userRole.findFirst({ where: { userId, role: { in: expanded } } }));
 }
 export async function audit(actorUserId: string | null, action: string, entityType: string, entityId: string, mediaSiteId?: string | null, metadata: Record<string, unknown> = {}) {
   await db.auditLog.create({ data: { actorUserId, action, entityType, entityId, mediaSiteId: mediaSiteId ?? null, metadata: JSON.parse(JSON.stringify(metadata)) } });

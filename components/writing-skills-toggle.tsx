@@ -1,6 +1,11 @@
 "use client";
+
+import "@/app/css/media.css";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { EmptyState } from "@/components/ui";
+import Switch from "@/components/switch";
+import { asFailure, failure, readBody } from "@/components/plain-errors";
 
 interface SkillOption {
   id: string;
@@ -13,6 +18,8 @@ interface SkillOption {
 export default function WritingSkillsToggle({ mediaSiteId }: { mediaSiteId: string }) {
   const router = useRouter();
   const [skills, setSkills] = useState<SkillOption[] | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -20,15 +27,19 @@ export default function WritingSkillsToggle({ mediaSiteId }: { mediaSiteId: stri
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/skills?mediaSiteId=${encodeURIComponent(mediaSiteId)}`)
-      .then((response) => response.json())
+      .then(async (response) => {
+        const body = await readBody(response);
+        if (!response.ok) throw failure(response.status, body, {}, "Daftar gaya penulisan belum bisa dimuat. Coba lagi sebentar lagi.");
+        return body as { skills?: SkillOption[] };
+      })
       .then((data) => {
         if (!cancelled) setSkills(data.skills ?? []);
       })
-      .catch(() => {
-        if (!cancelled) setError("Gagal memuat daftar skill.");
+      .catch((e) => {
+        if (!cancelled) setLoadError(asFailure(e, "Daftar gaya penulisan belum bisa dimuat. Coba lagi sebentar lagi.").message);
       });
     return () => { cancelled = true; };
-  }, [mediaSiteId]);
+  }, [mediaSiteId, attempt]);
 
   async function toggle(skill: SkillOption) {
     const enabled = !skill.enabled;
@@ -41,53 +52,47 @@ export default function WritingSkillsToggle({ mediaSiteId }: { mediaSiteId: stri
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mediaSiteId, skillId: skill.id, enabled }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Perubahan skill gagal disimpan.");
+      const result = await readBody(response);
+      if (!response.ok) throw failure(response.status, result, {}, "Perubahan belum tersimpan. Coba lagi sebentar lagi.");
       setSkills((current) => current?.map((item) => item.id === skill.id ? { ...item, enabled } : item) ?? current);
-      setMessage(enabled ? `Skill "${skill.name}" diaktifkan untuk media ini.` : `Skill "${skill.name}" dimatikan.`);
+      setMessage(enabled ? `Gaya ${skill.name} menyala. Draf AI berikutnya untuk media ini memakainya.` : `Gaya ${skill.name} dimatikan. Draf yang sudah ada tidak berubah.`);
       router.refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Perubahan skill gagal disimpan.");
+      setError(asFailure(e, "Perubahan belum tersimpan. Coba lagi sebentar lagi.").message);
     } finally {
       setBusyId(null);
     }
   }
 
-  if (skills === null) {
-    return (
-      <details className="writing-skills" style={{ marginTop: 16 }}>
-        <summary style={{ cursor: "pointer", fontWeight: 650 }}>Skill penulisan AI</summary>
-        <p className="muted" style={{ marginTop: 12 }}>Memuat…</p>
-      </details>
-    );
+  function retry() {
+    setLoadError("");
+    setSkills(null);
+    setAttempt((value) => value + 1);
   }
 
-  return (
-    <details className="writing-skills" style={{ marginTop: 16 }}>
-      <summary style={{ cursor: "pointer", fontWeight: 650 }}>Skill penulisan AI</summary>
-      {skills.length === 0 ? (
-        <p className="muted" style={{ marginTop: 12 }}>Belum ada skill tersedia.</p>
-      ) : (
-        <div className="stack" style={{ marginTop: 12, gap: 10 }}>
-          {skills.map((skill) => (
-            <label key={skill.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={skill.enabled}
-                disabled={busyId === skill.id}
-                onChange={() => toggle(skill)}
-                style={{ marginTop: 3 }}
-              />
-              <span>
+  return <section className="stack skills" aria-labelledby={`skills-${mediaSiteId}`}>
+    <div className="form-intro">
+      <h3 id={`skills-${mediaSiteId}`}>Gaya penulisan</h3>
+      <p>Pilih gaya yang dipakai AI saat membuat draf untuk media ini. Gaya yang menyala ikut diterapkan ke setiap draf baru.</p>
+    </div>
+
+    {loadError
+      ? <div role="alert" className="notice notice-error"><div className="stack-sm"><span>{loadError}</span><div className="actions"><button type="button" className="btn" onClick={retry}>Coba lagi</button></div></div></div>
+      : skills === null
+        ? <div className="skill-skeleton" role="status" aria-label="Memuat gaya penulisan"><div className="skeleton"/><div className="skeleton"/></div>
+        : skills.length === 0
+          ? <EmptyState title="Belum ada gaya penulisan" detail="Belum ada gaya penulisan di sistem. Setelah ada, Anda bisa menyalakannya di sini untuk tiap media." />
+          : <ul className="skill-list">
+            {skills.map((skill) => <li className="skill-row" key={skill.id}>
+              <div className="skill-copy">
                 <strong>{skill.name}</strong>
-                <span className="muted" style={{ display: "block", fontSize: 13 }}>{skill.description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
-      {error && <div role="alert" className="notice notice-error" style={{ marginTop: 10, marginBottom: 0 }}>{error}</div>}
-      {message && <div role="status" className="notice" style={{ marginTop: 10, marginBottom: 0 }}>{message}</div>}
-    </details>
-  );
+                <p id={`skill-${skill.id}-description`} className="muted">{skill.description}</p>
+              </div>
+              <Switch checked={skill.enabled} onChange={() => toggle(skill)} disabled={busyId === skill.id} label={busyId === skill.id ? "Menyimpan…" : skill.enabled ? "Menyala" : "Mati"} ariaLabel={`Gaya ${skill.name}: ${skill.enabled ? "menyala" : "mati"}`} describedBy={`skill-${skill.id}-description`} />
+            </li>)}
+          </ul>}
+
+    {error && <div role="alert" className="notice notice-error">{error}</div>}
+    {message && <div role="status" className="notice notice-success">{message}</div>}
+  </section>;
 }

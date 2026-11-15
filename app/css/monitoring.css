@@ -1,0 +1,17 @@
+/* Hallmark · shape: app screen · genre: playful · theme: Coral · states: loading, empty, error, full · v2.0.0 · Health screen: traffic-light cards and plain failure lists. Tokens only. */
+.app {
+  .mon-summary { font-size: var(--app-text-lg); font-weight: 700; color: var(--app-success); }
+  .mon-summary-warn { color: var(--app-warn); }
+  .mon-card { border-color: var(--app-line-strong); }
+  .mon-card[data-light="green"] { border-color: var(--app-success); }
+  .mon-card[data-light="yellow"] { border-color: var(--app-warn); }
+  .mon-card[data-light="red"] { border-color: var(--app-danger); }
+  .mon-todo { padding: var(--app-s3); border-radius: var(--app-radius-sm); background: var(--app-surface-2); }
+  .mon-failures { align-items: start; }
+  .mon-list { list-style: none; padding: 0; display: grid; gap: var(--app-s3); }
+  .mon-list li { display: grid; gap: 2px; padding-bottom: var(--app-s3); border-bottom: 1px solid var(--app-line); }
+  .mon-list li:last-child { border-bottom: 0; padding-bottom: 0; }
+  .mon-detail { font-size: var(--app-text-sm); }
+  .mon-detail summary { cursor: pointer; min-height: 24px; color: var(--app-link); }
+  .mon-chart-skeleton { height: 190px; }
+}

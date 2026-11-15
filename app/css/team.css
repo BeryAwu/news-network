@@ -1,0 +1,47 @@
+/* Hallmark · shape: app screen · genre: playful · theme: Coral (tokens in app.css) · redesign: full · nav: dark task sidebar · states: loading, empty, error, full · axes: light/rounded-sans/warm · posture: restrained · contrast: pass */
+/* Team and access screen: member list and add-member form. */
+.app {
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--app-s3); flex-wrap: wrap; }
+
+  .member-list { list-style: none; margin: 0; padding: 0; }
+  .member-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1fr); gap: var(--app-s3) var(--app-s5); align-items: start; padding: var(--app-s4) var(--app-s5); border-bottom: 1px solid var(--app-line); }
+  .member-row:last-child { border-bottom: 0; }
+  .member-id { display: grid; gap: 2px; min-width: 0; }
+  .member-id strong { overflow-wrap: anywhere; }
+  .member-id span { overflow-wrap: anywhere; font-size: var(--app-text-sm); }
+  .member-access { display: grid; gap: var(--app-s2); min-width: 0; }
+  .member-access p { font-size: var(--app-text-sm); }
+  .member-badges { display: flex; flex-wrap: wrap; gap: var(--app-s2); }
+  .member-state { display: grid; gap: var(--app-s2); justify-items: start; min-width: 0; }
+  .member-state p { font-size: var(--app-text-sm); }
+  .member-media { grid-column: 1 / -1; display: grid; gap: var(--app-s3); min-width: 0; padding-top: var(--app-s3); border-top: 1px dashed var(--app-line); }
+  .member-media h3 { font-size: var(--app-text-md); }
+  .member-media p { font-size: var(--app-text-sm); }
+  .media-chips { display: flex; flex-wrap: wrap; gap: var(--app-s2); }
+  .media-editor { display: grid; gap: var(--app-s3); padding: var(--app-s4); border-radius: var(--app-radius-sm); background: var(--app-surface-2); }
+  .media-editor-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--app-s4); }
+  .media-editor .checkline span { overflow-wrap: anywhere; }
+  .media-editor .checkline small { display: block; color: var(--app-muted); font-size: var(--app-text-sm); }
+
+  .team-form { max-width: 760px; }
+  .team-form .field { align-content: start; }
+  .team-password { max-width: 420px; }
+  .team-fieldset { display: grid; gap: var(--app-s3); min-width: 0; margin: 0; padding: 0; border: 0; }
+  .team-fieldset legend { padding: 0; margin-bottom: var(--app-s1); font-weight: 700; }
+  .team-media-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--app-s4); padding: var(--app-s2) var(--app-s4); border-radius: var(--app-radius-sm); background: var(--app-surface-2); }
+  .team-media-list .checkline span { overflow-wrap: anywhere; }
+
+  .team-skeleton { display: grid; gap: var(--app-s3); padding: var(--app-s5); }
+  .team-skeleton .skeleton { min-height: 64px; }
+}
+
+@media (max-width: 60rem) {
+  .app .member-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .app .member-id { grid-column: 1 / -1; }
+}
+@media (max-width: 40rem) {
+  .app .member-row { grid-template-columns: minmax(0, 1fr); padding: var(--app-s4); }
+  .app .team-media-list { grid-template-columns: minmax(0, 1fr); }
+  .app .media-editor-list { grid-template-columns: minmax(0, 1fr); }
+  .app .member-state { justify-items: start; }
+}

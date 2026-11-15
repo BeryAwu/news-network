@@ -2,7 +2,9 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { hasNetworkWideScope, requireMediaAccess, requireRole, requireSameOrigin } from "@/lib/auth";
 import { boundedPage, jsonError } from "@/lib/http";
-import { DraftEvidenceValidationError, generateDraft, IntegrationNotConfigured, PROMPT_VERSION } from "@/lib/ai";
+import { aiConfiguration, DraftEvidenceValidationError, generateDraft, IntegrationNotConfigured, PROMPT_VERSION } from "@/lib/ai";
+import { after } from "next/server";
+import { executeGenerationRuns, failStaleGenerationRuns } from "@/lib/generation";
 import { slugify } from "@/lib/security";
 import { createEditorialEvidenceSnapshot } from "@/lib/editorial-evidence";
 import { rateLimit } from "@/lib/rate-limit";
@@ -14,13 +16,14 @@ function persistedFacts(claimsUsed: unknown, uncertainties: unknown) {
   const parsed = savedArticleFacts.safeParse({ claimsUsed, uncertainties });
   return parsed.success ? { claimsUsed: parsed.data.claimsUsed, uncertainties: parsed.data.uncertainties } : { claimsUsed: [] as string[], uncertainties: [] as string[] };
 }
-const generationAction = z.object({ action: z.literal("generate"), sourceBriefId: z.string().min(1) });
+const generationAction = z.object({ action: z.literal("generate"), sourceBriefId: z.string().min(1), styleNote: z.string().trim().max(500).optional() });
+const writtenAction = z.object({ action: z.literal("create-as-written"), sourceBriefId: z.string().min(1) });
 const reviewAction = z.object({ action: z.literal("review"), articleId: z.string().min(1), decision: z.enum(["APPROVED", "REJECTED", "NEEDS_CHANGES"]), notes: z.string().max(2000).default("") });
 const batchReviewAction = z.object({ action: z.literal("bulk-approve"), articleIds: z.array(z.string().min(1)).min(1).max(100), confirmation: z.literal(true) });
 const editAction = z.object({ action: z.literal("edit"), articleId: z.string().min(1), title: z.string().min(8).max(180), slug: z.string().max(140).optional(), excerpt: z.string().min(12).max(500), body: z.string().min(120).max(30000), seoTitle: z.string().max(180), metaDescription: z.string().max(300), tags: z.array(z.string().max(40)).max(12), imageBrief: z.string().max(1000), featuredAssetId: z.string().nullable().optional() });
 const revisionAction = z.object({ action: z.literal("revise"), articleId: z.string().min(1), instruction: z.string().min(5).max(2000) });
 const restoreAction = z.object({ action: z.literal("restore"), articleId: z.string().min(1), versionNumber: z.number().int().positive() });
-const inputSchema = z.discriminatedUnion("action", [generationAction, editAction, revisionAction, reviewAction, batchReviewAction, restoreAction]);
+const inputSchema = z.discriminatedUnion("action", [generationAction, writtenAction, editAction, revisionAction, reviewAction, batchReviewAction, restoreAction]);
 
 function articleVersionFields(article: { title: string; slug: string; excerpt: string; body: string; seoTitle: string; metaDescription: string; tags: string[]; imageBrief: string; categoryId: string | null; featuredAssetId: string | null }) {
   return { title: article.title, slug: article.slug, excerpt: article.excerpt, body: article.body, seoTitle: article.seoTitle, metaDescription: article.metaDescription, tags: article.tags, imageBrief: article.imageBrief, categoryId: article.categoryId, featuredAssetId: article.featuredAssetId };
@@ -66,84 +69,54 @@ export async function POST(request: Request) {
     }
 
     if (input.action === "generate") {
-      const brief = await db.sourceBrief.findUnique({
-        where: { id: input.sourceBriefId },
-        include: {
-          references: true,
-          facts: true,
-          mediaTargets: {
-            include: {
-              mediaSite: {
-                include: {
-                  profile: true,
-                  categories: { where: { isActive: true }, orderBy: { sortOrder: "asc" } }
-                }
-              }
-            }
-          }
-        }
-      });
+      const brief = await db.sourceBrief.findUnique({ where: { id: input.sourceBriefId }, include: { mediaTargets: { select: { mediaSiteId: true } } } });
       if (!brief || brief.archivedAt) return Response.json({ error: "Source brief not found." }, { status: 404 });
       for (const target of brief.mediaTargets) await requireMediaAccess(user.id, target.mediaSiteId);
-      const outcomes = await Promise.all(brief.mediaTargets.map(async ({ mediaSiteId, mediaSite }) => {
+      const ai = aiConfiguration();
+      if (!ai.configured || !ai.provider) return Response.json({ error: new IntegrationNotConfigured("AI provider").message }, { status: 409 });
+      await failStaleGenerationRuns();
+      const outcomes: { mediaSiteId: string; status: string; runId?: string; articleId?: string; title?: string; reusedExisting?: boolean }[] = [];
+      const runIds: string[] = [];
+      for (const { mediaSiteId } of brief.mediaTargets) {
         const existing = await db.article.findFirst({ where: { sourceBriefId: brief.id, mediaSiteId, status: { notIn: ["ARCHIVED", "REJECTED"] } }, select: { id: true, title: true, status: true } });
-        if (existing) return { mediaSiteId, articleId: existing.id, title: existing.title, status: existing.status, reusedExisting: true };
-        let provider = process.env.AI_PROVIDER || "unconfigured";
-        let model = process.env.AI_MODEL || "unconfigured";
-        try {
-          const profile = mediaSite.profile ?? { niche: "", targetAudience: "", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 };
-          const guidance = await enabledWritingGuidance(db, mediaSiteId);
-          const result = await generateDraft(brief, { ...mediaSite, profile, categories: mediaSite.categories }, undefined, undefined, guidance);
-          provider = result.provider; model = result.model || "unknown";
-          const category = mediaSite.categories.find((item) => item.name.toLowerCase() === result.draft.suggestedCategory.toLowerCase());
-          const slug = `${slugify(result.draft.slugSuggestion || result.draft.title)}-${mediaSiteId.slice(-6)}-${brief.id.slice(-6)}`.slice(0, 120);
-          const article = await db.$transaction(async (tx) => {
-            const created = await tx.article.create({ data: {
-              mediaSiteId, sourceBriefId: brief.id, createdById: user.id, categoryId: category?.id ?? null,
-              title: result.draft.title, slug, excerpt: result.draft.excerpt, body: result.draft.body,
-              seoTitle: result.draft.seoTitle, metaDescription: result.draft.metaDescription, tags: result.draft.tags,
-              imageBrief: result.draft.imageBrief, claimsUsed: result.draft.claimsUsed, uncertainties: result.draft.uncertainties,
-              status: "NEEDS_REVIEW", versionNumber: 1
-            } });
-            await tx.articleVersion.create({ data: {
-              articleId: created.id, versionNumber: 1, title: created.title, slug: created.slug, excerpt: created.excerpt,
-              body: created.body, seoTitle: created.seoTitle, metaDescription: created.metaDescription, tags: created.tags,
-              imageBrief: created.imageBrief, categoryId: created.categoryId, changeType: "INITIAL_AI",
-              aiProvider: result.provider, aiModel: result.model, promptVersion: result.promptVersion,
-              changeSummary: result.changeSummary, claimsUsed: result.draft.claimsUsed, uncertainties: result.draft.uncertainties,
-              createdById: user.id
-            } });
-            await tx.aiGenerationRun.create({ data: {
-              sourceBriefId: brief.id, articleId: created.id, mediaSiteId, operation: "GENERATE_ARTICLE",
-              provider: result.provider, model: result.model || "unknown", promptVersion: result.promptVersion, status: "SUCCEEDED",
-              inputHash: result.inputHash, outputSummary: result.draft.title, latencyMs: result.latencyMs,
-              inputTokens: result.inputTokens, outputTokens: result.outputTokens, createdById: user.id, completedAt: new Date()
-            } });
-            await tx.auditLog.create({ data: {
-              actorUserId: user.id, mediaSiteId, action: "ARTICLE_GENERATED", entityType: "Article", entityId: created.id,
-              metadata: { provider: result.provider, model: result.model, promptVersion: result.promptVersion }
-            } });
-            return created;
-          });
-          return { mediaSiteId, articleId: article.id, title: article.title, status: article.status };
-        } catch (error) {
-          if (error instanceof IntegrationNotConfigured) return { mediaSiteId, status: "NOT_CONFIGURED", error: error.message };
-          await db.aiGenerationRun.create({ data: {
-            sourceBriefId: brief.id, mediaSiteId, operation: "GENERATE_ARTICLE", provider, model,
-            promptVersion: PROMPT_VERSION, status: "FAILED", inputHash: `${brief.id}:${mediaSiteId}`,
-            errorCode: "GENERATION_FAILED", errorMessage: error instanceof Error ? error.message.slice(0, 1000) : "Unknown generation error",
-            createdById: user.id, completedAt: new Date()
-          } });
-          return { mediaSiteId, status: "FAILED", error: error instanceof Error ? error.message : "Generation failed." };
-        }
-      }));
-      const createdAny = outcomes.some((outcome) => Boolean(outcome.articleId));
-      return Response.json({ outcomes }, { status: createdAny ? 201 : 200 });
+        if (existing) { outcomes.push({ mediaSiteId, articleId: existing.id, title: existing.title, status: existing.status, reusedExisting: true }); continue; }
+        const inFlight = await db.aiGenerationRun.findFirst({ where: { sourceBriefId: brief.id, mediaSiteId, operation: "GENERATE_ARTICLE", status: "PENDING" }, select: { id: true } });
+        if (inFlight) { outcomes.push({ mediaSiteId, runId: inFlight.id, status: "PENDING" }); continue; }
+        const run = await db.aiGenerationRun.create({ data: { sourceBriefId: brief.id, mediaSiteId, operation: "GENERATE_ARTICLE", provider: ai.provider, model: ai.model ?? "unknown", promptVersion: PROMPT_VERSION, status: "PENDING", inputHash: `${brief.id}:${mediaSiteId}`, styleNote: input.styleNote || null, createdById: user.id } });
+        runIds.push(run.id);
+        outcomes.push({ mediaSiteId, runId: run.id, status: "PENDING" });
+      }
+      if (runIds.length) after(() => executeGenerationRuns(runIds));
+      return Response.json({ outcomes }, { status: 202 });
+    }
+
+    if (input.action === "create-as-written") {
+      const brief = await db.sourceBrief.findUnique({ where: { id: input.sourceBriefId }, include: { mediaTargets: { select: { mediaSiteId: true } } } });
+      if (!brief || brief.archivedAt) return Response.json({ error: "Topik tidak ditemukan." }, { status: 404 });
+      for (const target of brief.mediaTargets) await requireMediaAccess(user.id, target.mediaSiteId);
+      const body = brief.narrative.trim();
+      if (body.length < 120) return Response.json({ error: "Narasi terlalu pendek untuk diterbitkan apa adanya. Tulis minimal 120 karakter, atau pilih AI." }, { status: 400 });
+      if (brief.workingTitle.trim().length < 8) return Response.json({ error: "Judul terlalu pendek. Tulis minimal 8 karakter." }, { status: 400 });
+      const excerpt = (body.split(/(?<=[.!?])\s+/)[0] ?? body).slice(0, 280).trim().padEnd(12, ".");
+      const outcomes: { mediaSiteId: string; articleId: string; created: boolean }[] = [];
+      for (const { mediaSiteId } of brief.mediaTargets) {
+        const existing = await db.article.findFirst({ where: { sourceBriefId: brief.id, mediaSiteId, status: { notIn: ["ARCHIVED", "REJECTED"] } }, select: { id: true } });
+        if (existing) { outcomes.push({ mediaSiteId, articleId: existing.id, created: false }); continue; }
+        const slug = `${slugify(brief.workingTitle)}-${mediaSiteId.slice(-6)}-${brief.id.slice(-6)}`.slice(0, 120);
+        const created = await db.$transaction(async (tx) => {
+          const article = await tx.article.create({ data: { mediaSiteId, sourceBriefId: brief.id, createdById: user.id, title: brief.workingTitle.trim(), slug, excerpt, body, seoTitle: brief.workingTitle.trim().slice(0, 180), metaDescription: excerpt.slice(0, 300), tags: [], imageBrief: "", claimsUsed: [], uncertainties: [], status: "NEEDS_REVIEW", versionNumber: 1 } });
+          await tx.articleVersion.create({ data: { articleId: article.id, versionNumber: 1, title: article.title, slug: article.slug, excerpt: article.excerpt, body: article.body, seoTitle: article.seoTitle, metaDescription: article.metaDescription, tags: [], imageBrief: "", categoryId: null, changeType: "MANUAL_EDIT", changeSummary: "Ditulis operator, tanpa AI.", claimsUsed: [], uncertainties: [], createdById: user.id } });
+          await tx.auditLog.create({ data: { actorUserId: user.id, mediaSiteId, action: "ARTICLE_CREATED_AS_WRITTEN", entityType: "Article", entityId: article.id, metadata: { briefId: brief.id } } });
+          return article;
+        });
+        outcomes.push({ mediaSiteId, articleId: created.id, created: true });
+      }
+      return Response.json({ outcomes }, { status: 201 });
     }
 
     if (input.action === "bulk-approve") {
       const articles = await db.article.findMany({ where: { id: { in: input.articleIds }, status: "NEEDS_REVIEW", archivedAt: null }, include: { sourceBrief: { include: { references: true, facts: true } }, versions: { orderBy: { versionNumber: "desc" }, take: 1 } } });
-      const canOverrideEditorialSeparation = user.roles.some((assignment) => assignment.role === "OWNER" || assignment.role === "ADMIN");
+      const canOverrideEditorialSeparation = user.roles.some((assignment) => ["OWNER", "ADMIN", "OPERATOR"].includes(assignment.role));
       if (!canOverrideEditorialSeparation && articles.some((article) => article.createdById === user.id || article.versions[0]?.createdById === user.id)) return Response.json({ error: "Reviewers cannot approve articles they created or last revised." }, { status: 403 });
       if (articles.length !== new Set(input.articleIds).size) return Response.json({ error: "Every selected article must exist and be awaiting review. No items were approved." }, { status: 409 });
       for (const article of articles) await requireMediaAccess(user.id, article.mediaSiteId);
@@ -183,7 +156,7 @@ export async function POST(request: Request) {
     }
 
     if (input.action === "review") {
-      const canOverrideEditorialSeparation = user.roles.some((assignment) => assignment.role === "OWNER" || assignment.role === "ADMIN");
+      const canOverrideEditorialSeparation = user.roles.some((assignment) => ["OWNER", "ADMIN", "OPERATOR"].includes(assignment.role));
       const currentVersion = await db.articleVersion.findUnique({ where: { articleId_versionNumber: { articleId: article.id, versionNumber: article.versionNumber } }, select: { createdById: true } });
       if (!canOverrideEditorialSeparation && (article.createdById === user.id || currentVersion?.createdById === user.id)) return Response.json({ error: "Reviewers cannot approve articles they created or last revised." }, { status: 403 });
       if (article.status !== "NEEDS_REVIEW") return Response.json({ error: "Only drafts awaiting review may be reviewed." }, { status: 409 });

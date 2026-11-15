@@ -9,14 +9,28 @@ import { editorialEvidenceSnapshotSchema } from "@/lib/editorial-evidence";
 import { rateLimit } from "@/lib/rate-limit";
 const publishAction = z.object({ action: z.literal("publish"), articleIds: z.array(z.string().min(1)).min(1).max(100), scheduledAt: z.string().datetime().optional() });
 const retryAction = z.object({ action: z.literal("retry"), targetIds: z.array(z.string().min(1)).min(1).max(100) });
-const inputSchema = z.discriminatedUnion("action", [publishAction, retryAction]);
+const unpublishAction = z.object({ action: z.literal("unpublish"), articleId: z.string().min(1) });
+const inputSchema = z.discriminatedUnion("action", [publishAction, retryAction, unpublishAction]);
 let queue: Queue | null = null;
 function publishingQueue() { if (!process.env.REDIS_URL) return null; if (!queue) { const connection = new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null, lazyConnect: true }); queue = new Queue("news-publishing", { connection }); } return queue; }
 export async function GET(request: Request) { try { const user = await requireRole("OWNER", "ADMIN", "EDITOR", "REVIEWER", "PUBLISHER"); const params = new URL(request.url).searchParams; const page = boundedPage(params.get("page")); const all = await hasNetworkWideScope(user.id); const targets = await db.publicationTarget.findMany({ where: all ? {} : { mediaSite: { mediaScopes: { some: { userId: user.id } } } }, include: { domain: { select: { hostname: true } }, mediaSite: { select: { id: true, displayName: true, slug: true, domains: { where: { isCanonical: true, isActive: true, verificationStatus: "VERIFIED" } } } }, article: { select: { id: true, title: true, slug: true, status: true } }, attempts: { orderBy: { attemptNumber: "desc" }, take: 3 } }, orderBy: { createdAt: "desc" }, skip: (page - 1) * 200, take: 200 }); return Response.json(targets); } catch (e) { return jsonError(e); } }
 export async function POST(request: Request) { try { requireSameOrigin(request); const input = inputSchema.parse(await request.json()); const user = await requireRole("OWNER", "ADMIN", "PUBLISHER"); if (!rateLimit(`publish:${user.id}`, 10, 60 * 1000)) return Response.json({ error: "Terlalu banyak aksi publikasi. Tunggu sebentar." }, { status: 429 });
+  if (input.action === "unpublish") {
+    const article = await db.article.findUnique({ where: { id: input.articleId }, select: { id: true, mediaSiteId: true, status: true } });
+    if (!article) return Response.json({ error: "Artikel tidak ditemukan." }, { status: 404 });
+    await requireMediaAccess(user.id, article.mediaSiteId);
+    if (article.status !== "PUBLISHED") return Response.json({ error: "Hanya artikel yang sedang terbit yang bisa ditarik." }, { status: 409 });
+    const withdrawn = await db.$transaction(async (tx) => {
+      const live = await tx.publicationTarget.updateMany({ where: { articleId: article.id, status: "PUBLISHED" }, data: { status: "CANCELLED", lastErrorCode: "UNPUBLISHED", lastErrorMessage: `Ditarik dari publikasi oleh ${user.email}.` } });
+      await tx.article.update({ where: { id: article.id }, data: { status: "APPROVED", publishedAt: null } });
+      await tx.auditLog.create({ data: { actorUserId: user.id, mediaSiteId: article.mediaSiteId, action: "ARTICLE_UNPUBLISHED", entityType: "Article", entityId: article.id, metadata: { targets: live.count } } });
+      return live.count;
+    });
+    return Response.json({ unpublished: true, targets: withdrawn });
+  }
 if (input.action === "publish") { const articles = await db.article.findMany({ where: { id: { in: input.articleIds }, status: "APPROVED", archivedAt: null }, include: { mediaSite: { include: { domains: { where: { isActive: true, verificationStatus: "VERIFIED" } } } }, versions: { orderBy: { versionNumber: "desc" }, take: 1 }, reviews: { where: { decision: "APPROVED" }, orderBy: { createdAt: "desc" }, take: 5 } }, }); if (articles.length !== new Set(input.articleIds).size) return Response.json({ error: "Every selected article must be approved and eligible. No publication targets were created." }, { status: 409 }); const approvalEvidence = new Map<string, z.infer<typeof editorialEvidenceSnapshotSchema>>(); for (const article of articles) {
   await requireMediaAccess(user.id, article.mediaSiteId);
-  if (!article.mediaSite.domains.some((domain) => domain.isCanonical)) return Response.json({ error: `Media ${article.mediaSite.displayName} requires an active verified canonical domain before publishing.` }, { status: 409 });
+  if (article.mediaSite.domains.length === 0) return Response.json({ error: `Media ${article.mediaSite.displayName} requires an active verified canonical domain before publishing.` }, { status: 409 });
   const version = article.versions.find((item) => item.versionNumber === article.versionNumber);
   const approval = version && article.reviews.find((review) => review.decision === "APPROVED" && review.articleVersionId === version.id);
   if (!version || !approval) return Response.json({ error: `Article ${article.title} has no reviewer approval for its current version. No targets were created.` }, { status: 409 });
@@ -37,7 +51,8 @@ const created = await db.$transaction(async (tx) => {
       if (existing?.status === "PUBLISHED" || existing?.status === "PUBLISHING") { targets.push(existing); continue; }
       const evidence = approvalEvidence.get(version.id);
       if (!evidence) throw new Error(`Missing validated approval evidence for article version ${version.id}.`);
-      const snapshot = { title: version.title, slug: version.slug, excerpt: version.excerpt, body: version.body, seoTitle: version.seoTitle, metaDescription: version.metaDescription, tags: version.tags, imageBrief: version.imageBrief, claimsUsed: version.claimsUsed, uncertainties: version.uncertainties, featuredAssetId: version.featuredAssetId, featuredAsset: featuredAsset ? { secureUrl: featuredAsset.secureUrl, altText: featuredAsset.altText, caption: featuredAsset.caption, credit: featuredAsset.credit, isAiGenerated: featuredAsset.isAiGenerated, width: featuredAsset.width, height: featuredAsset.height } : null, sourceReferences: evidence.sourceReferences, sourceFacts: evidence.sourceFacts };
+      const aiAssisted = (await tx.articleVersion.count({ where: { articleId: article.id, changeType: { in: ["INITIAL_AI", "AI_REVISION"] } } })) > 0;
+      const snapshot = { aiAssisted, title: version.title, slug: version.slug, excerpt: version.excerpt, body: version.body, seoTitle: version.seoTitle, metaDescription: version.metaDescription, tags: version.tags, imageBrief: version.imageBrief, claimsUsed: version.claimsUsed, uncertainties: version.uncertainties, featuredAssetId: version.featuredAssetId, featuredAsset: featuredAsset ? { secureUrl: featuredAsset.secureUrl, altText: featuredAsset.altText, caption: featuredAsset.caption, credit: featuredAsset.credit, isAiGenerated: featuredAsset.isAiGenerated, width: featuredAsset.width, height: featuredAsset.height } : null, sourceReferences: evidence.sourceReferences, sourceFacts: evidence.sourceFacts };
       const target = existing
         ? await tx.publicationTarget.update({ where: { id: existing.id }, data: { status: scheduledAt ? "SCHEDULED" : "QUEUED", scheduledAt, approvedSnapshot: snapshot, lastErrorCode: null, lastErrorMessage: null } })
         : await tx.publicationTarget.create({ data: { articleId: article.id, mediaSiteId: article.mediaSiteId, domainId: domain.id, articleVersionId: version.id, approvedSnapshot: snapshot, status: scheduledAt ? "SCHEDULED" : "QUEUED", scheduledAt, idempotencyKey: key, createdById: user.id } });

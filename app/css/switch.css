@@ -1,0 +1,16 @@
+/* Hallmark · shape: app screen · genre: playful · theme: Coral (tokens in app.css) · redesign: full · nav: dark task sidebar · states: loading, empty, error, full · axes: light/rounded-sans/warm · posture: restrained · contrast: pass */
+/* On/off switch shared by the team list and the writing style list. Markup: components/switch.tsx. */
+.app {
+  .switch { display: inline-flex; align-items: center; gap: var(--app-s3); min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--app-ink); font-weight: 700; text-align: left; cursor: pointer; }
+  .switch:focus-visible { outline: 3px solid var(--app-focus); outline-offset: 3px; border-radius: var(--app-radius-sm); }
+  .switch:disabled { opacity: 0.55; cursor: not-allowed; }
+  .switch:active .switch-track { background: var(--app-ink-2); }
+  .switch-track { position: relative; flex: none; width: 46px; height: 26px; border-radius: var(--app-radius-pill); background: var(--app-muted); transition: background-color var(--app-dur-short) ease-out; }
+  .switch-thumb { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--app-surface); box-shadow: var(--app-shadow); transition: transform var(--app-dur-short) ease-out; }
+  .switch[aria-checked="true"] .switch-track { background: var(--app-success); }
+  .switch[aria-checked="true"] .switch-thumb { transform: translateX(20px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app .switch-track, .app .switch-thumb { transition: none; }
+}

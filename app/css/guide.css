@@ -1,0 +1,43 @@
+/* Hallmark · shape: app screen · genre: playful · theme: Coral · states: full · v2.0.0 · Guide page: contents rail, numbered steps, one diagram, answers as disclosures. Tokens only. */
+.app {
+  .guide { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--app-s6); align-items: start; }
+  .guide-toc { position: sticky; inset-block-start: calc(60px + var(--app-s5)); display: grid; gap: var(--app-s1); }
+  .guide-toc strong { margin-bottom: var(--app-s2); }
+  .guide-toc a { display: block; padding: var(--app-s2) var(--app-s3); border-radius: var(--app-radius-sm); color: var(--app-ink-2); text-decoration: none; font-weight: 600; }
+  .guide-toc a:hover { background: var(--app-primary-soft); }
+  .guide-toc a:focus-visible, .guide-answers summary:focus-visible { outline: 3px solid var(--app-focus); outline-offset: 2px; }
+  .guide-toc a:active, .guide-answers summary:active { background: var(--app-primary-soft); }
+  .guide-ip .btn:disabled { opacity: 0.55; color: var(--app-muted); background: var(--app-surface-2); cursor: not-allowed; }
+  .guide-body { display: grid; gap: var(--app-s6); min-width: 0; }
+  .guide-section { display: grid; gap: var(--app-s4); scroll-margin-top: calc(60px + var(--app-s5)); }
+  .guide-section > h2 { font-size: var(--app-text-2xl); text-wrap: balance; }
+  .guide-lede { font-size: var(--app-text-lg); color: var(--app-ink-2); max-width: 62ch; }
+  .guide-steps { display: grid; gap: var(--app-s3); margin: 0; padding: 0; list-style: none; counter-reset: step; }
+  .guide-steps > li { counter-increment: step; display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: var(--app-s3); align-items: start; padding: var(--app-s4); border: 1px solid var(--app-line); border-radius: var(--app-radius); background: var(--app-surface); }
+  .guide-steps > li::before { content: counter(step); display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--app-primary); color: var(--app-primary-ink); font-weight: 800; }
+  .guide-steps h3 { font-size: var(--app-text-lg); margin-bottom: var(--app-s1); }
+  .guide-steps p, .guide-steps ul { color: var(--app-ink-2); }
+  .guide-steps ul { margin-top: var(--app-s2); }
+  .guide-ip { display: flex; align-items: center; gap: var(--app-s3); flex-wrap: wrap; margin-top: var(--app-s3); padding: var(--app-s3) var(--app-s4); border-radius: var(--app-radius-sm); background: var(--app-primary-soft); }
+  .guide-ip code { font-size: var(--app-text-lg); font-weight: 700; background: transparent; padding: 0; }
+  .guide-diagram { width: 100%; max-width: 720px; height: auto; }
+  .guide-diagram text { font-family: inherit; fill: var(--app-ink); }
+  .guide-answers { display: grid; gap: var(--app-s2); }
+  .guide-answers details { border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: var(--app-surface); }
+  .guide-answers summary { display: flex; align-items: center; min-height: 48px; padding: 0 var(--app-s4); font-weight: 700; cursor: pointer; }
+  .guide-answers details[open] summary { border-bottom: 1px solid var(--app-line); }
+  .guide-answers details > div { display: grid; gap: var(--app-s2); padding: var(--app-s4); color: var(--app-ink-2); }
+  .guide-buttons { display: grid; gap: var(--app-s2); }
+  .guide-buttons > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--app-s3); align-items: start; padding: var(--app-s3) 0; border-bottom: 1px solid var(--app-line); }
+  .guide-buttons > div:last-child { border-bottom: 0; }
+  .guide-buttons strong { font-size: var(--app-text-lg); }
+}
+@media (max-width: 60rem) {
+  .app .guide { grid-template-columns: minmax(0, 1fr); }
+  .app .guide-toc { position: static; grid-auto-flow: column; overflow-x: auto; padding-bottom: var(--app-s2); }
+  .app .guide-toc strong { display: none; }
+  .app .guide-toc a { white-space: nowrap; }
+}
+@media (max-width: 40rem) {
+  .app .guide-buttons > div { grid-template-columns: minmax(0, 1fr); gap: var(--app-s1); }
+}

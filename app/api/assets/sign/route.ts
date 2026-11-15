@@ -36,7 +36,7 @@ async function readBoundedUploadForm(request: Request) {
   const replay = new Request(request.url, { method: "POST", headers, body: Buffer.concat(chunks) });
   return replay.formData();
 }
-const provenanceSchema = z.object({ mediaSiteId: z.string().min(1), originalFilename: z.string().min(1).max(255), altText: z.string().max(500).default(""), caption: z.string().max(2000).default(""), credit: z.string().max(500).default(""), sourceUrl: z.string().url().max(2000).optional(), sourcePublisher: z.string().max(250).default(""), licenseType: z.enum(["USER_PROVIDED", "CC0", "CC_BY", "CC_BY_SA", "PUBLIC_DOMAIN", "AI_GENERATED", "OTHER"]).default("USER_PROVIDED"), licenseUrl: z.string().url().max(2000).optional(), attributionText: z.string().max(1000).default(""), isAiGenerated: z.preprocess((value) => value === true || value === "true", z.boolean()).default(false), generationPrompt: z.string().max(1000).optional() });
+const provenanceSchema = z.object({ mediaSiteId: z.string().min(1).optional(), originalFilename: z.string().min(1).max(255), altText: z.string().max(500).default(""), caption: z.string().max(2000).default(""), credit: z.string().max(500).default(""), sourceUrl: z.string().url().max(2000).optional(), sourcePublisher: z.string().max(250).default(""), licenseType: z.enum(["USER_PROVIDED", "CC0", "CC_BY", "CC_BY_SA", "PUBLIC_DOMAIN", "AI_GENERATED", "OTHER"]).default("USER_PROVIDED"), licenseUrl: z.string().url().max(2000).optional(), attributionText: z.string().max(1000).default(""), isAiGenerated: z.preprocess((value) => value === true || value === "true", z.boolean()).default(false), generationPrompt: z.string().max(1000).optional() });
 function configureCloudinary() {
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
   const apiKey = process.env.CLOUDINARY_API_KEY;
@@ -86,17 +86,21 @@ export async function POST(request: Request) {
     if (file.size > MAX_BYTES) return Response.json({ error: "Image exceeds the 10 MB upload limit." }, { status: 413 });
     const actualFormat = sniffImage(new Uint8Array(await file.slice(0, 16).arrayBuffer()));
     if (!actualFormat) return Response.json({ error: "Only valid JPEG, PNG, WebP, or AVIF image bytes are allowed." }, { status: 415 });
-    await requireMediaAccess(user.id, input.mediaSiteId);
-    const media = await db.mediaSite.findUnique({ where: { id: input.mediaSiteId }, select: { slug: true } });
-    if (!media) return Response.json({ error: "Media not found." }, { status: 404 });
+    // Without a mediaSiteId the picture is stored once and may be used by any media the uploader can blast to.
+    let folder = `nnms/shared/${user.id}/library`;
+    if (input.mediaSiteId) {
+      await requireMediaAccess(user.id, input.mediaSiteId);
+      const media = await db.mediaSite.findUnique({ where: { id: input.mediaSiteId }, select: { slug: true } });
+      if (!media) return Response.json({ error: "Media not found." }, { status: 404 });
+      folder = `nnms/media/${media.slug}/library`;
+    }
     configureCloudinary();
-    const folder = `nnms/media/${media.slug}/library`;
     const publicId = randomUUID();
     createdPublicId = `${folder}/${publicId}`;
     const result = await uploadToCloudinary(file, folder, publicId);
     if (result.public_id !== createdPublicId || result.resource_type !== "image" || result.bytes > MAX_BYTES || result.width > 2400 || result.height > 2400 || result.format.toLowerCase() !== actualFormat) throw new Error("Cloudinary asset metadata does not match the validated image constraints.");
     const asset = await db.asset.create({ data: {
-      mediaSiteId: input.mediaSiteId, cloudinaryPublicId: result.public_id, secureUrl: result.secure_url,
+      mediaSiteId: input.mediaSiteId ?? null, cloudinaryPublicId: result.public_id, secureUrl: result.secure_url,
       resourceType: result.resource_type, format: result.format, width: result.width, height: result.height,
       bytes: result.bytes, etag: result.etag, cloudinaryVersion: result.version, originalFilename: input.originalFilename,
       altText: input.altText, caption: input.caption, credit: input.credit, sourceUrl: input.sourceUrl,
@@ -105,7 +109,7 @@ export async function POST(request: Request) {
       isAiGenerated: input.isAiGenerated || input.licenseType === "AI_GENERATED", generationPrompt: input.generationPrompt,
       createdById: user.id
     } });
-    await audit(user.id, "ASSET_UPLOADED", "Asset", asset.id, input.mediaSiteId, { cloudinaryPublicId: asset.cloudinaryPublicId, format: asset.format, bytes: asset.bytes, isAiGenerated: asset.isAiGenerated });
+    await audit(user.id, "ASSET_UPLOADED", "Asset", asset.id, input.mediaSiteId ?? null, { cloudinaryPublicId: asset.cloudinaryPublicId, format: asset.format, bytes: asset.bytes, isAiGenerated: asset.isAiGenerated });
     return Response.json(asset, { status: 201 });
   } catch (error) {
     if (createdPublicId && process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {

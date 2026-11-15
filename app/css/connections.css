@@ -1,0 +1,19 @@
+/* Hallmark · shape: app screen · genre: playful · theme: Coral (tokens in app.css) · redesign: full · nav: dark task sidebar · states: loading, empty, error, full · axes: light/rounded-sans/warm · posture: restrained · contrast: pass */
+/* Service connections screen: one card per service with a traffic-light badge. */
+.app {
+  .service-card { display: grid; gap: var(--app-s3); align-content: start; }
+  .service-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--app-s3); flex-wrap: wrap; }
+  .service-head h2 { font-size: var(--app-text-lg); text-wrap: balance; }
+  .service-head .badge svg { flex: none; }
+  .service-purpose { font-weight: 600; }
+  .service-state { color: var(--app-ink-2); }
+  .tech-note { color: var(--app-muted); font-size: var(--app-text-xs); overflow-wrap: anywhere; }
+  .tech-note code { font-size: inherit; }
+
+  .connections-skeleton { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--app-s4); }
+  .connections-skeleton .skeleton { min-height: 200px; }
+}
+
+@media (max-width: 40rem) {
+  .app .connections-skeleton { grid-template-columns: minmax(0, 1fr); }
+}

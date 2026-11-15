@@ -19,6 +19,7 @@ enum Role {
   EDITOR
   REVIEWER
   PUBLISHER
+  OPERATOR
 }
 
 enum MediaStatus {
@@ -273,6 +274,11 @@ model SourceBrief {
   editorNotes   String             @default("") @db.Text
   status        BriefStatus        @default(DRAFT)
   sourceSummary String?            @db.Text
+  /// null = legacy brief (per-media drafts); "AI" or "AS_WRITTEN" = a blast: one shared content for every media target.
+  contentMode      String?
+  styleSkillSlug   String?
+  featuredAssetId  String?
+  galleryAssetIds  String[]           @default([])
   archivedAt    DateTime?          @db.Timestamptz(3)
   createdAt     DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt     DateTime           @updatedAt @db.Timestamptz(3)
@@ -338,6 +344,7 @@ model Article {
   categoryId         String?
   createdById        String
   featuredAssetId    String?
+  galleryAssetIds    String[]            @default([])
   title              String
   slug               String
   excerpt            String              @default("") @db.Text
@@ -385,6 +392,7 @@ model ArticleVersion {
   imageBrief         String              @default("") @db.Text
   categoryId         String?
   featuredAssetId    String?
+  galleryAssetIds    String[]            @default([])
   changeType         VersionChange
   changeInstruction  String?             @db.Text
   createdById        String?
@@ -532,6 +540,8 @@ model AiGenerationRun {
   latencyMs     Int?
   errorCode     String?
   errorMessage  String?     @db.Text
+  styleNote     String?     @db.Text
+  styleSkillSlug String?
   createdById   String
   createdAt     DateTime    @default(now()) @db.Timestamptz(3)
   completedAt   DateTime?   @db.Timestamptz(3)

@@ -27,4 +27,4 @@ This checklist summarizes the current code state, not production acceptance. `IM
 
 ## Current automated verification
 
-At the last recorded run, typecheck, lint, production build, and the 20-test Vitest suite passed. See `IMPLEMENTATION_STATUS.md` for the latest observed results and local smoke-test scope. These checks do not replace the external and route-level verification items above.
+At the last recorded run, typecheck, lint, production build, and the Vitest suite passed. See `IMPLEMENTATION_STATUS.md` for the latest observed results and local smoke-test scope. These checks do not replace the external and route-level verification items above.

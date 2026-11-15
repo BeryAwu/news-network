@@ -1,5 +1,31 @@
 import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
 import LoginForm from "@/components/login-form";
+import AuthArt, { AuthBrand } from "@/components/auth-art";
 import { databaseReady } from "@/lib/database";
-export default async function LoginPage() { if (!(await databaseReady())) redirect("/setup?issue=database"); if (await currentUser()) redirect("/dashboard"); return <main className="login-page"><div className="login-card"><div className="brand" style={{ padding:0,color:"#176b4a" }}>Newsroom <small style={{ color:"#65726c" }}>Central newsroom workspace</small></div><h1 style={{ marginTop:30 }}>Masuk ke ruang redaksi</h1><p className="subtitle" style={{ marginBottom:24 }}>Gunakan akun newsroom yang telah disiapkan oleh pemilik.</p><LoginForm /></div></main>; }
+import { appFont } from "@/lib/app-font";
+import "@/app/app.css";
+
+export const dynamic = "force-dynamic";
+
+export default async function LoginPage() {
+  if (!(await databaseReady())) redirect("/setup?issue=database");
+  if (await currentUser()) redirect("/dashboard");
+  return (
+    <div className={`app ${appFont.variable}`}>
+      <div className="auth">
+        <AuthArt />
+        <main className="auth-panel">
+          <div className="auth-box">
+            <AuthBrand />
+            <div className="stack-sm">
+              <h1>Masuk</h1>
+              <p className="muted">Pakai email dan kata sandi dari admin Anda.</p>
+            </div>
+            <LoginForm />
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
