@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       const brief = await db.sourceBrief.findUnique({ where: { id: input.sourceBriefId }, include: { mediaTargets: { select: { mediaSiteId: true } } } });
       if (!brief || brief.archivedAt) return Response.json({ error: "Source brief not found." }, { status: 404 });
       for (const target of brief.mediaTargets) await requireMediaAccess(user.id, target.mediaSiteId);
-      const ai = aiConfiguration();
+      const ai = await aiConfiguration();
       if (!ai.configured || !ai.provider) return Response.json({ error: new IntegrationNotConfigured("AI provider").message }, { status: 409 });
       await failStaleGenerationRuns();
       const outcomes: { mediaSiteId: string; status: string; runId?: string; articleId?: string; title?: string; reusedExisting?: boolean }[] = [];

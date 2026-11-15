@@ -566,3 +566,13 @@ model AuditLog {
   @@index([mediaSiteId, createdAt])
   @@index([entityType, entityId, createdAt])
 }
+
+/// Secrets and settings the owner changes from the dashboard instead of the server environment.
+/// `value` is AES-256-GCM ciphertext (see lib/secrets.ts); `hint` is the non-secret tail shown in the UI.
+model IntegrationSetting {
+  key           String   @id
+  value         String   @db.Text
+  hint          String   @default("")
+  updatedByName String   @default("")
+  updatedAt     DateTime @updatedAt @db.Timestamptz(3)
+}

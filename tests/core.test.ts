@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { aiConfiguration, articleDraftSchema, generateDraft, validateDraftEvidence } from "../lib/ai";
+
+// The dashboard key lives in the database; tests control it here instead of touching one.
+const override = vi.hoisted(() => ({ value: { apiKey: null as string | null, model: null as string | null, hint: "", updatedAt: null as Date | null, updatedByName: "", unreadable: false } }));
+vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiOverride: async () => override.value }));
+import { aiConfiguration, articleDraftSchema, generateDraft, plainAiFailure, validateDraftEvidence } from "../lib/ai";
+import { checkOpenRouterKey } from "../lib/ai-settings";
 import { parsePage, robotsAllows } from "../lib/ingest";
 import { createEditorialEvidenceSnapshot } from "../lib/editorial-evidence";
 import { isPublicIp, normalizeHostname, slugify } from "../lib/security";
@@ -121,21 +126,21 @@ describe("same-origin mutation protection", () => {
 
 describe("AI integration readiness", () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
-  it("enables the deterministic adapter only outside production", () => {
+  it("enables the deterministic adapter only outside production", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "true");
     vi.stubEnv("AI_PROVIDER", "");
     vi.stubEnv("AI_API_KEY", "");
     vi.stubEnv("NODE_ENV", "development");
-    expect(aiConfiguration()).toMatchObject({ configured: true, mode: "test adapter", provider: "test" });
+    expect(await aiConfiguration()).toMatchObject({ configured: true, mode: "test adapter", provider: "test" });
     vi.stubEnv("NODE_ENV", "production");
-    expect(aiConfiguration()).toMatchObject({ configured: false, mode: "not configured" });
+    expect(await aiConfiguration()).toMatchObject({ configured: false, mode: "not configured" });
   });
-  it("recognizes OpenRouter and defaults to the newsroom drafting model", () => {
+  it("recognizes OpenRouter and defaults to the newsroom drafting model", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false");
     vi.stubEnv("AI_PROVIDER", "openrouter");
     vi.stubEnv("AI_MODEL", "");
     vi.stubEnv("AI_API_KEY", "configured-token");
-    expect(aiConfiguration()).toMatchObject({ configured: true, mode: "credentials configured", provider: "openrouter", model: "qwen/qwen3-235b-a22b-2507" });
+    expect(await aiConfiguration()).toMatchObject({ configured: true, mode: "credentials configured", provider: "openrouter", model: "qwen/qwen3-235b-a22b-2507", keySource: "env" });
   });
   it("sends OpenRouter chat completions to its native endpoint with JSON mode and the default model", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false");
@@ -159,11 +164,11 @@ describe("AI integration readiness", () => {
     expect(JSON.parse(String(request.init?.body))).toMatchObject({ model: "qwen/qwen3-235b-a22b-2507", response_format: { type: "json_object" }, provider: { require_parameters: true, data_collection: "deny" } });
     expect(result).toMatchObject({ provider: "openrouter", model: "qwen/qwen3-235b-a22b-2507", inputTokens: 321, outputTokens: 88 });
   });
-  it("does not mislabel unsupported providers as ready", () => {
+  it("does not mislabel unsupported providers as ready", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false");
     vi.stubEnv("AI_PROVIDER", "unknown-provider");
     vi.stubEnv("AI_API_KEY", "present-but-not-supported");
-    expect(aiConfiguration()).toMatchObject({ configured: false, mode: "unsupported provider" });
+    expect(await aiConfiguration()).toMatchObject({ configured: false, mode: "unsupported provider" });
   });
   it("retries a fabricated fact id with corrective feedback and keeps the draft when the second answer is valid", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false");
@@ -238,5 +243,68 @@ describe("writing skills", () => {
     expect(guidance).toContain("Skill A guidance");
     expect(guidance).toContain("Skill B guidance");
     expect(await enabledWritingGuidance(db as never, "media-2")).toBe("");
+  });
+});
+
+describe("AI key managed from the dashboard", () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); override.value = { apiKey: null, model: null, hint: "", updatedAt: null, updatedByName: "", unreadable: false }; });
+  const draftJson = { title: "Judul berita uji untuk kunci", excerpt: "Ringkasan berita uji yang cukup panjang.", body: "Isi berita uji. ".repeat(20), suggestedCategory: "Umum", tags: [], seoTitle: "s", metaDescription: "m", slugSuggestion: "judul", imageBrief: "", claimsUsed: [], uncertainties: [] };
+  const brief = { workingTitle: "Judul", narrative: "n", editorNotes: "", sourceSummary: null, references: [], facts: [] };
+  const media = { displayName: "Berita", profile: { niche: "", targetAudience: "", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 }, categories: [] };
+
+  it("prefers the dashboard key over the server environment, and reports where it came from", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openrouter"); vi.stubEnv("AI_API_KEY", "env-key"); vi.stubEnv("AI_MODEL", "");
+    override.value = { ...override.value, apiKey: "dashboard-key-1234", hint: "1234" };
+    expect(await aiConfiguration()).toMatchObject({ configured: true, provider: "openrouter", keySource: "dashboard" });
+  });
+
+  it("works with no server key at all once the owner saved one, and never leaks the key in the public config", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", ""); vi.stubEnv("AI_API_KEY", "");
+    expect((await aiConfiguration()).configured).toBe(false);
+    override.value = { ...override.value, apiKey: "dashboard-key-1234", model: "qwen/qwen3-32b" };
+    const config = await aiConfiguration();
+    expect(config).toMatchObject({ configured: true, model: "qwen/qwen3-32b", keySource: "dashboard" });
+    expect(JSON.stringify(config)).not.toContain("dashboard-key-1234");
+  });
+
+  it("sends the NEXT request with the new key and model, without a restart", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openrouter"); vi.stubEnv("AI_API_KEY", "old-env-key"); vi.stubEnv("AI_MODEL", "");
+    const seen: { auth: string; model: string; url: string }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => { seen.push({ url, auth: String((init.headers as Record<string, string>).authorization), model: JSON.parse(String(init.body)).model }); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draftJson) } }], usage: {} })); }));
+    await generateDraft(brief, media);
+    override.value = { ...override.value, apiKey: "brand-new-key", model: "qwen/qwen3-32b" };
+    await generateDraft(brief, media);
+    expect(seen[0]).toMatchObject({ auth: "Bearer old-env-key", model: "qwen/qwen3-235b-a22b-2507" });
+    expect(seen[1]).toMatchObject({ auth: "Bearer brand-new-key", model: "qwen/qwen3-32b" });
+    expect(seen[1]!.url).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+
+  it("never sends the dashboard key to a custom base URL", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openai-compatible"); vi.stubEnv("AI_API_KEY", "x"); vi.stubEnv("AI_BASE_URL", "https://evil.example/v1");
+    override.value = { ...override.value, apiKey: "brand-new-key" };
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => { urls.push(url); return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draftJson) } }] })); }));
+    await generateDraft(brief, media);
+    expect(urls[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
+  });
+
+  it("tests a key against OpenRouter and says why it fails, so a bad key is never saved", async () => {
+    const reply = (status: number, body: unknown = {}) => new Response(JSON.stringify(body), { status });
+    vi.stubGlobal("fetch", vi.fn(async () => reply(401)));
+    expect(await checkOpenRouterKey("bad-key-bad-key-bad-key", "qwen/qwen3-32b")).toMatchObject({ ok: false, reason: expect.stringContaining("tidak mengenali") });
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => { calls.push(url); return url.endsWith("/auth/key") ? reply(200, { data: { label: "sk-or-v1-abc…xyz", limit: 10, limit_remaining: 7.5 } }) : reply(402); }));
+    expect(await checkOpenRouterKey("empty-credit-key-12345", "qwen/qwen3-32b")).toMatchObject({ ok: false, reason: expect.stringContaining("Kredit") });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => (url.endsWith("/auth/key") ? reply(200, { data: { label: "k", limit: 10, limit_remaining: 7.5 } }) : reply(200, { choices: [] }))));
+    expect(await checkOpenRouterKey("good-key-good-key-good-1", "qwen/qwen3-32b")).toEqual({ ok: true, label: "k", limit: 10, remaining: 7.5 });
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    expect(await checkOpenRouterKey("any-key-any-key-any-key", "m")).toMatchObject({ ok: false, reason: expect.stringContaining("Tidak bisa menghubungi") });
+  });
+
+  it("explains a spent or rejected key in plain words", async () => {
+    expect(plainAiFailure("AI provider returned HTTP 402.")).toContain("Kredit OpenRouter habis");
+    expect(plainAiFailure("AI provider returned HTTP 401.")).toContain("ditolak");
+    expect(plainAiFailure("AI provider returned HTTP 429.")).toContain("membatasi");
+    expect(plainAiFailure("boom")).toBe("Penulisan oleh AI gagal. Coba tulis ulang.");
   });
 });

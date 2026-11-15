@@ -47,7 +47,7 @@ export default async function MonitoringPage() {
   let data: Awaited<ReturnType<typeof load>> | null = null;
   try { data = await load(user.id, isOwner); } catch { data = null; }
 
-  const ai = aiConfiguration();
+  const ai = await aiConfiguration();
   const cloudConfigured = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
   const redisConfigured = Boolean(process.env.REDIS_URL);
 

@@ -1,0 +1,14 @@
+/* Hallmark · shape: app screen · genre: playful · theme: Coral · states: full, busy, error · v2.0.0 · Owner AI key card. Tokens only. */
+.app {
+  .ai-key h2 { display: flex; align-items: center; gap: var(--app-s2); }
+  .ai-key-status { display: grid; gap: var(--app-s2); margin: 0; padding: var(--app-s4); border-radius: var(--app-radius-sm); background: var(--app-surface-2); }
+  .ai-key-status > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--app-s3); }
+  .ai-key-status dt { color: var(--app-muted); font-weight: 600; }
+  .ai-key-status dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+  .ai-key .advanced summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 700; color: var(--app-link); }
+  .ai-key .advanced summary:focus-visible { outline: 3px solid var(--app-focus); outline-offset: 2px; }
+  .ai-key .advanced summary:active { color: var(--app-ink); }
+}
+@media (max-width: 40rem) {
+  .app .ai-key-status > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}

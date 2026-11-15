@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     const input = startSchema.parse(await request.json());
     if (input.mode === "AI") {
       if (!rateLimit(`ai:${user.id}`, 6, 60 * 1000)) return Response.json({ error: "Terlalu banyak permintaan AI. Tunggu sebentar sebelum mencoba lagi." }, { status: 429 });
-      const ai = aiConfiguration();
+      const ai = await aiConfiguration();
       if (!ai.configured || !ai.provider) return Response.json({ error: "Layanan AI belum disiapkan. Pilih 'Pakai tulisan saya apa adanya' atau minta admin menyiapkan AI." }, { status: 409 });
     }
     const { runId } = await startBlast(user, input);

@@ -1,5 +1,6 @@
 /* Hallmark · shape: app screen · genre: playful · theme: Coral · states: loading, empty, error, full · v2.0.0 · Report screen: period picker, media table, export buttons. Tokens only. */
 .app {
+  .rep-dl { display: flex; gap: var(--app-s2); flex-wrap: wrap; }
   .rep-presets { display: flex; gap: var(--app-s2); flex-wrap: wrap; }
   .rep-presets .btn { min-height: 52px; }
   .rep-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 14rem)); gap: var(--app-s4); }

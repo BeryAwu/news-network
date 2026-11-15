@@ -1,6 +1,8 @@
 import { CircleCheck, CircleX, TriangleAlert } from "lucide-react";
 import { PageHeading } from "@/components/ui";
 import { requireRole } from "@/lib/auth";
+import AiKeyForm from "@/components/ai-key-form";
+import { readAiKeyStatus } from "@/lib/ai-status";
 import { aiConfiguration } from "@/lib/ai";
 import { db } from "@/lib/db";
 import "@/app/css/connections.css";
@@ -33,8 +35,10 @@ async function databaseReachable() {
 }
 
 export default async function SettingsPage() {
-  await requireRole("OWNER", "ADMIN");
-  const ai = aiConfiguration();
+  const user = await requireRole("OWNER", "ADMIN");
+  const isOwner = user.roles.some((assignment) => assignment.role === "OWNER");
+  const ai = await aiConfiguration();
+  const aiKey = await readAiKeyStatus();
   const databaseReady = await databaseReachable();
   const cloudConfigured = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
   const redisConfigured = Boolean(process.env.REDIS_URL);
@@ -44,9 +48,9 @@ export default async function SettingsPage() {
     : ai.mode === "unsupported provider"
       ? { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "red", label: "Penyedia tidak didukung", state: "Penyedia AI yang dipilih belum bisa dipakai. Minta teknisi server memilih openai, openai-compatible, atau openrouter, lalu mulai ulang aplikasi.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" }
       : ai.configured
-        ? { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "green", label: "Sudah disetel", state: "Kunci AI sudah terisi. Draf masih bisa gagal kalau kuota habis atau jaringan putus. Kalau itu terjadi, coba lagi beberapa menit kemudian.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" }
-        : { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "red", label: "Belum disetel", state: "Belum ada kunci AI, jadi draf belum bisa dibuat. Minta teknisi server mengisi penyedia dan kunci AI, lalu mulai ulang aplikasi.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" };
-  aiService.extra = `Penyedia: ${ai.provider || "belum dipilih"}. Model: ${ai.model || "belum dipilih"}.${ai.provider === "openrouter" ? " Untuk menekan biaya, ganti AI_MODEL menjadi qwen/qwen3-32b. Permintaan diarahkan ke penyedia yang tidak mengumpulkan data menurut kebijakan OpenRouter. Itu bukan jaminan, jadi jangan menulis data pribadi atau rahasia redaksi di topik berita." : ""}`;
+        ? { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "green", label: "Sudah disetel", state: "Kunci AI sudah terisi. Draf masih bisa gagal kalau kredit habis atau jaringan putus. Kalau kredit habis, pemilik bisa mengganti kunci di kartu Kunci AI di bawah tanpa menyentuh server.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" }
+        : { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "red", label: "Belum disetel", state: "Belum ada kunci AI, jadi draf belum bisa dibuat. Pemilik bisa menempel kunci OpenRouter di kartu Kunci AI di bawah.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" };
+  aiService.extra = `Penyedia: ${ai.provider || "belum dipilih"}. Model: ${ai.model || "belum dipilih"}. Sumber kunci: ${ai.keySource === "dashboard" ? "dashboard" : ai.keySource === "env" ? "server" : "belum ada"}.${ai.provider === "openrouter" ? " Untuk menekan biaya, pilih model qwen/qwen3-32b di kartu Kunci AI. Permintaan diarahkan ke penyedia yang tidak mengumpulkan data menurut kebijakan OpenRouter. Itu bukan jaminan, jadi jangan menulis data pribadi atau rahasia redaksi di topik berita." : ""}`;
 
   const services: Service[] = [
     databaseReady
@@ -86,6 +90,9 @@ export default async function SettingsPage() {
         </section>;
       })}
     </div>
-    <p className="muted">Kunci rahasia dipasang di server oleh teknisi Anda. Halaman ini tidak pernah menampilkannya dan tidak bisa mengubahnya.</p>
+    {isOwner
+      ? <AiKeyForm initial={aiKey} />
+      : <p className="muted">Hanya pemilik yang bisa mengganti kunci AI dari halaman ini.</p>}
+    <p className="muted">Kunci database, Cloudinary, dan Redis dipasang di server oleh teknisi Anda. Halaman ini tidak pernah menampilkan kunci apa pun.</p>
   </>;
 }

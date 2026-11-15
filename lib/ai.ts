@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
+import { DEFAULT_OPENROUTER_MODEL, OPENROUTER_BASE_URL, readAiOverride } from "@/lib/ai-settings";
 
 export const PROMPT_VERSION = "news-draft-id-v3";
 export const articleDraftSchema = z.object({ title: z.string().min(8).max(180), excerpt: z.string().min(12).max(500), body: z.string().min(120).max(30000), suggestedCategory: z.string().max(100), tags: z.array(z.string().max(40)).max(12), seoTitle: z.string().max(180), metaDescription: z.string().max(300), slugSuggestion: z.string().max(140), imageBrief: z.string().max(1000), claimsUsed: z.array(z.object({ claimText: z.string().min(1).max(500), sourceFactIds: z.array(z.string().max(80)).max(10) })).max(50), uncertainties: z.array(z.string().max(500)).max(50) });
@@ -21,15 +22,49 @@ export function validateDraftEvidence(draft: ArticleDraft, facts: EvidenceFact[]
   if (problems.length) throw new DraftEvidenceValidationError(problems);
   return draft;
 }
-export function aiConfiguration() {
+/** Safe to hand to pages and clients: never contains the key. */
+export interface AiConfiguration { configured: boolean; mode: string; provider: string | null; model: string | null; keySource: "dashboard" | "env" | null }
+interface AiCredentials extends AiConfiguration { apiKey: string | null; baseUrl: string; fallbackModel: string }
+
+/** The key the owner saved in the dashboard wins over the server environment; read fresh on every call. */
+async function resolveAi(): Promise<AiCredentials> {
   const test = process.env.AI_TEST_ADAPTER === "true" && process.env.NODE_ENV !== "production";
-  if (test) return { configured: true, mode: "test adapter", provider: "test", model: "deterministic-test-v1" };
-  const provider = process.env.AI_PROVIDER?.trim().toLowerCase() || "";
-  const supported = provider === "openai" || provider === "openai-compatible" || provider === "openrouter";
-  const model = process.env.AI_MODEL || (provider === "openrouter" ? "qwen/qwen3-235b-a22b-2507" : null);
+  if (test) return { configured: true, mode: "test adapter", provider: "test", model: "deterministic-test-v1", keySource: null, apiKey: null, baseUrl: "", fallbackModel: "" };
+  const override = await readAiOverride();
+  const fallbackModel = process.env.AI_FALLBACK_MODEL || "qwen/qwen3-32b";
+  const envProvider = process.env.AI_PROVIDER?.trim().toLowerCase() || "";
+  if (override.apiKey) {
+    const envModel = envProvider === "openrouter" ? process.env.AI_MODEL : "";
+    return { configured: true, mode: "credentials configured", provider: "openrouter", model: override.model || envModel || DEFAULT_OPENROUTER_MODEL, keySource: "dashboard", apiKey: override.apiKey, baseUrl: OPENROUTER_BASE_URL, fallbackModel };
+  }
+  const supported = envProvider === "openai" || envProvider === "openai-compatible" || envProvider === "openrouter";
+  const model = override.model || process.env.AI_MODEL || (envProvider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : null);
   const configured = supported && Boolean(process.env.AI_API_KEY);
-  const mode = !provider ? "not configured" : !supported ? "unsupported provider" : configured ? "credentials configured" : "not configured";
-  return { configured, mode, provider: provider || null, model };
+  const mode = !envProvider ? "not configured" : !supported ? "unsupported provider" : configured ? "credentials configured" : "not configured";
+  const baseUrl = process.env.AI_BASE_URL || (envProvider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1");
+  return { configured, mode, provider: envProvider || null, model, keySource: configured ? "env" : null, apiKey: process.env.AI_API_KEY || null, baseUrl, fallbackModel };
+}
+/** The OpenRouter key and model that would be used right now (dashboard first, then the server environment), for the owner's checks. Never sent to a browser. */
+export async function currentOpenRouterKey(): Promise<{ apiKey: string; model: string } | null> {
+  const config = await resolveAi();
+  return config.provider === "openrouter" && config.apiKey ? { apiKey: config.apiKey, model: config.model || DEFAULT_OPENROUTER_MODEL } : null;
+}
+export async function aiConfiguration(): Promise<AiConfiguration> {
+  const { configured, mode, provider, model, keySource } = await resolveAi();
+  return { configured, mode, provider, model, keySource };
+}
+
+/** Thrown when the AI provider answers with a non-2xx status. The message keeps the old wording. */
+export class AiProviderError extends Error { constructor(public readonly status: number) { super(`AI provider returned HTTP ${status}.`); } }
+
+/** Plain Indonesian reason for a failed AI run, from the stored technical message. */
+export function plainAiFailure(message: string | null | undefined): string {
+  const status = message?.match(/HTTP (\d{3})/)?.[1];
+  if (status === "401" || status === "403") return "Kunci OpenRouter ditolak. Pemilik bisa menggantinya di Koneksi layanan.";
+  if (status === "402") return "Kredit OpenRouter habis. Pemilik bisa mengisi kredit atau mengganti kunci di Koneksi layanan, lalu tulis ulang berita ini.";
+  if (status === "429") return "OpenRouter membatasi permintaan. Tunggu beberapa menit, lalu tulis ulang berita ini.";
+  if (message && /not configured/i.test(message)) return "Layanan AI belum disiapkan. Pemilik bisa memasang kunci di Koneksi layanan.";
+  return "Penulisan oleh AI gagal. Coba tulis ulang.";
 }
 interface ArticleRevisionContext { title: string; excerpt: string; body: string; seoTitle: string; metaDescription: string; tags: string[]; imageBrief: string }
 interface AiBrief { workingTitle: string; narrative: string; editorNotes: string; sourceSummary: string | null; references: { id: string; url: string; title: string; publisherName: string; excerpt: string | null; retrievalStatus: string }[]; facts: { id: string; claimText: string; supportStatus: string; evidenceNote: string; sourceReferenceId: string | null }[] }
@@ -52,21 +87,21 @@ function testDraft(input: ReturnType<typeof promptInput>): ArticleDraft {
   return articleDraftSchema.parse({ title: `${topic} — ${input.media.name}`, excerpt: `${topic}. Draf uji ini disusun dari konteks yang diberikan dan memerlukan pemeriksaan redaksi.`, body, suggestedCategory: input.media.categories[0] ?? "Umum", tags: [], seoTitle: topic, metaDescription: `Informasi yang disediakan tentang ${topic}; periksa sumber dan konteks sebelum diterbitkan.`, slugSuggestion: topic, imageBrief: `Ilustrasi editorial yang relevan dengan ${topic}; jangan disajikan sebagai foto dokumenter.`, claimsUsed: input.brief.narrative ? [{ claimText: "Konteks berasal dari narasi yang diberikan oleh pengguna.", sourceFactIds: [] }] : [], uncertainties: ["Konten dihasilkan oleh adapter uji; belum diverifikasi oleh layanan AI maupun redaksi.", ...input.brief.references.filter((reference) => reference.retrievalStatus !== "SUCCESS").map((reference) => `Referensi tidak berhasil diverifikasi: ${reference.url}`)] });
 }
 export async function generateDraft(brief: AiBrief, media: AiMedia, instruction?: string, currentArticle?: ArticleRevisionContext, guidance?: string) {
-  const config = aiConfiguration();
+  const config = await resolveAi();
   const provider = config.provider;
   if (!config.configured || !provider) throw new IntegrationNotConfigured("AI provider");
   const input = promptInput(brief, media, instruction, currentArticle, guidance);
   const started = Date.now();
   if (provider === "test") return { draft: testDraft(input), provider, model: config.model || "deterministic-test-v1", promptVersion: PROMPT_VERSION, latencyMs: Date.now() - started, inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"), inputTokens: null as number | null, outputTokens: null as number | null, changeSummary: "Adapter uji deterministik; verifikasi editorial tetap diwajibkan." };
-  const base = process.env.AI_BASE_URL || (provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1");
-  const model = process.env.AI_MODEL || config.model || "gpt-4o-mini";
+  const base = config.baseUrl;
+  const model = config.model || "gpt-4o-mini";
   const firstAttemptMessage = `${JSON.stringify(input)}\n\nReturn JSON with title, excerpt, body, suggestedCategory, tags, seoTitle, metaDescription, slugSuggestion, imageBrief, claimsUsed as {claimText,sourceFactIds} objects, and uncertainties.`;
   let likelyError: string | null = null;
   const lastError = await (async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const attemptModel = attempt === 0 ? model : process.env.AI_FALLBACK_MODEL || "qwen/qwen3-32b";
-      const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${process.env.AI_API_KEY}`, "content-type": "application/json", ...(provider === "openrouter" ? { "HTTP-Referer": process.env.ADMIN_BASE_URL || "http://localhost:3000", "X-OpenRouter-Title": "News Network Management System" } : {}) }, signal: AbortSignal.timeout(180000), body: JSON.stringify({ model: attemptModel, temperature: 0.4, max_tokens: 3000, response_format: { type: "json_object" }, ...(provider === "openrouter" ? { provider: { require_parameters: true, data_collection: "deny" } } : {}), messages: [{ role: "system", content: input.requirements }, { role: "user", content: attempt === 0 ? firstAttemptMessage : `${firstAttemptMessage}\n\nYour previous response failed validation with these errors, and must be fixed:\n${JSON.stringify({ errors: likelyError }, null, 2)}` }] }) });
-      if (!response.ok) throw new Error(`AI provider returned HTTP ${response.status}.`);
+      const attemptModel = attempt === 0 ? model : config.fallbackModel;
+      const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", ...(provider === "openrouter" ? { "HTTP-Referer": process.env.ADMIN_BASE_URL || "http://localhost:3000", "X-OpenRouter-Title": "News Network Management System" } : {}) }, signal: AbortSignal.timeout(180000), body: JSON.stringify({ model: attemptModel, temperature: 0.4, max_tokens: 3000, response_format: { type: "json_object" }, ...(provider === "openrouter" ? { provider: { require_parameters: true, data_collection: "deny" } } : {}), messages: [{ role: "system", content: input.requirements }, { role: "user", content: attempt === 0 ? firstAttemptMessage : `${firstAttemptMessage}\n\nYour previous response failed validation with these errors, and must be fixed:\n${JSON.stringify({ errors: likelyError }, null, 2)}` }] }) });
+      if (!response.ok) throw new AiProviderError(response.status);
       const result = await response.json() as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
       const content = result.choices?.[0]?.message?.content;
       if (!content) throw new Error("AI provider returned no structured article.");

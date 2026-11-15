@@ -4,6 +4,8 @@ import { EmptyState, PageHeading } from "@/components/ui";
 import { HorizontalBars } from "@/components/charts";
 import { requireUser } from "@/lib/auth";
 import { mediaStats, parseReportDate, publishedRows, type MediaStat, type PublishedRow } from "@/lib/reports";
+import { listBlasts } from "@/lib/blasts";
+import type { BlastListItem } from "@/lib/blast-types";
 import "@/app/css/reports.css";
 
 export const dynamic = "force-dynamic";
@@ -85,6 +87,8 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
   const to = parseReportDate(dates.to || null, true);
   const badRange = Boolean(from && to && from > to);
 
+  let blasts: { items: BlastListItem[]; total: number; page: number; pages: number } | null = null;
+  let blastsFailed = false;
   let stats: MediaStat[] = [];
   let rows: PublishedRow[] = [];
   let failed = false;
@@ -98,6 +102,10 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
     } catch {
       failed = true;
     }
+  }
+
+  if (!badRange) {
+    try { blasts = await listBlasts(user.id, Number(first(query.bpage)) || 1, 15, { from, to, liveOnly: true }); } catch { blastsFailed = true; }
   }
 
   const shown = selected.size ? stats.filter((m) => selected.has(m.mediaSiteId)) : stats;
@@ -153,6 +161,49 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
 
         {badRange && <div className="notice notice-error" role="alert"><span>Tanggal &quot;Dari&quot; lebih baru daripada tanggal &quot;Sampai&quot;. Tukar kedua tanggal itu lalu tekan Tampilkan.</span></div>}
         {failed && <div className="notice notice-error" role="alert"><span>Laporan belum bisa dimuat. Muat ulang halaman ini. Jika masih gagal, coba lagi beberapa menit lagi.</span></div>}
+
+        {!badRange && (
+          <section className="card stack" aria-labelledby="rep-berita-title">
+            <div className="stack-sm">
+              <h2 id="rep-berita-title">Laporan per berita</h2>
+              <p className="muted">Satu berita, satu laporan: pengarang, tanggal, judul, narasi, dan semua link media yang memuat berita itu. Unduh sebagai Word atau PDF.</p>
+            </div>
+            {blastsFailed && <div className="notice notice-error" role="alert"><span>Daftar berita belum bisa dimuat. Muat ulang halaman ini.</span></div>}
+            {!blastsFailed && blasts && blasts.items.length === 0 && <p className="muted">Belum ada berita terbit pada periode ini.</p>}
+            {blasts && blasts.items.length > 0 && (
+              <>
+                <div className="table-wrap">
+                  <table>
+                    <thead><tr><th>Berita</th><th>Ditulis</th><th>Media</th><th>Unduh laporan</th></tr></thead>
+                    <tbody>
+                      {blasts.items.map((item) => (
+                        <tr key={item.id}>
+                          <td><Link href={`/blasts/${item.id}`}><strong>{item.title}</strong></Link><div className="muted">Oleh {item.author.name}</div></td>
+                          <td className="num">{dateTime.format(new Date(item.createdAt))}</td>
+                          <td className="num">{item.publishedCount} dari {item.mediaCount} terbit</td>
+                          <td>
+                            <div className="rep-dl">
+                              <a className="btn btn-sm" href={`/api/blasts/${item.id}/report?format=docx`}><FileText size={16} aria-hidden="true" />Word</a>
+                              <a className="btn btn-sm" href={`/api/blasts/${item.id}/report?format=pdf`}><FileText size={16} aria-hidden="true" />PDF</a>
+                              <a className="btn btn-sm" href={`/api/blasts/${item.id}/links?format=xlsx`}><FileSpreadsheet size={16} aria-hidden="true" />Link (Excel)</a>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {blasts.pages > 1 && (
+                  <nav className="row-between" aria-label="Halaman berita">
+                    {blasts.page > 1 ? <Link className="btn btn-sm" href={href({ ...exportParams, range: custom ? "" : activeRange, bpage: String(blasts.page - 1) })}>Sebelumnya</Link> : <span />}
+                    <span className="muted">Halaman {blasts.page} dari {blasts.pages}</span>
+                    {blasts.page < blasts.pages ? <Link className="btn btn-sm" href={href({ ...exportParams, range: custom ? "" : activeRange, bpage: String(blasts.page + 1) })}>Berikutnya</Link> : <span />}
+                  </nav>
+                )}
+              </>
+            )}
+          </section>
+        )}
 
         {!badRange && !failed && (stats.length === 0 ? (
           <EmptyState title="Belum ada media" detail="Laporan muncul setelah Anda menambahkan media dan menerbitkan berita." href="/media" label="Buka Media saya" />

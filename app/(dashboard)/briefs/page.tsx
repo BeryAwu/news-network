@@ -13,7 +13,7 @@ export default async function BriefsPage() {
   const canEdit = user.roles.some((assignment) => ["OWNER", "ADMIN", "EDITOR"].includes(assignment.role));
   const isAdmin = user.roles.some((assignment) => ["OWNER", "ADMIN"].includes(assignment.role));
   if (!media.length && canEdit && isAdmin) redirect("/media?first=1");
-  const ai = aiConfiguration();
+  const ai = await aiConfiguration();
   const testMode = ai.mode === "test adapter";
   const aiState = { ready: ai.configured && !testMode, testMode };
 

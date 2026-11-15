@@ -6,6 +6,7 @@ import { publishTarget } from "@/lib/publishing";
 import { publishingQueue } from "@/lib/publish-queue";
 import { failStaleGenerationRuns } from "@/lib/generation";
 import { plainPublishError } from "@/lib/publish-reasons";
+import { plainAiFailure } from "@/lib/ai";
 import type { Prisma } from "@prisma/client";
 import type { BlastAsset, BlastContent, BlastDetail, BlastEditInput, BlastLink, BlastListItem, BlastMedia, BlastMode, BlastStatus, PublicationState } from "@/lib/blast-types";
 
@@ -80,10 +81,16 @@ function summarize(blast: LoadedBlast, status: BlastStatus): Pick<BlastListItem,
   };
 }
 
-export async function listBlasts(userId: string, page = 1, take = 20) {
+export interface BlastListOptions { from?: Date; to?: Date; /** Only blasts that are live on at least one media (inside the period when from/to are given). */ liveOnly?: boolean }
+
+export async function listBlasts(userId: string, page = 1, take = 20, opts: BlastListOptions = {}) {
   const wide = await hasNetworkWideScope(userId);
   // A topic saved by the wizard but never started (the second call failed) has no content yet and is not a blast.
   const where: Prisma.SourceBriefWhereInput = { archivedAt: null, OR: [{ contentMode: { not: null } }, { articles: { some: {} } }], ...(wide ? {} : { createdById: userId }) };
+  if (opts.liveOnly || opts.from || opts.to) {
+    const publishedAt = opts.from || opts.to ? { publishedAt: { ...(opts.from ? { gte: opts.from } : {}), ...(opts.to ? { lte: opts.to } : {}) } } : {};
+    where.articles = { some: { status: "PUBLISHED", archivedAt: null, ...publishedAt } };
+  }
   const safePage = Math.max(1, Math.min(page, 500));
   const [total, rows] = await Promise.all([
     db.sourceBrief.count({ where }),
@@ -142,7 +149,7 @@ export async function getBlastDetail(user: User, id: string): Promise<BlastDetai
   const media = mediaRows(blast);
   const links: BlastLink[] = media.flatMap((m) => (m.publication?.status === "PUBLISHED" && m.publication.url ? [{ mediaName: m.name, title: content?.title ?? blast.workingTitle, url: m.publication.url }] : []));
   const wide = await hasNetworkWideScope(user.id);
-  const generation = fresh ? { state: (fresh.status === "SUCCEEDED" ? "DONE" : fresh.status) as "PENDING" | "FAILED" | "DONE", error: fresh.status === "FAILED" ? (fresh.errorMessage ? "Penulisan oleh AI gagal. Coba tulis ulang." : null) : null } : null;
+  const generation = fresh ? { state: (fresh.status === "SUCCEEDED" ? "DONE" : fresh.status) as "PENDING" | "FAILED" | "DONE", error: fresh.status === "FAILED" ? plainAiFailure(fresh.errorMessage) : null } : null;
   return {
     id: blast.id, status, mode: (blast.contentMode as BlastMode | null) ?? null, createdAt: blast.createdAt.toISOString(), author: blast.createdBy,
     originalNarrative: blast.narrative, content, generation, media, links,

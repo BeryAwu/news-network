@@ -11,7 +11,7 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
   const database = await databaseReady();
   const session = Boolean(process.env.SESSION_SECRET && process.env.SESSION_SECRET.length >= 32);
   const cloud = Boolean(process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET);
-  const ai = aiConfiguration();
+  const ai = await aiConfiguration();
   const redis = Boolean(process.env.REDIS_URL);
   const items = [
     ["PostgreSQL / Prisma", database, "DATABASE_URL diperlukan untuk akun, media, naskah dan publikasi.", true],
