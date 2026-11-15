@@ -7,7 +7,7 @@ import type { HomeProps, SiteThemeModule } from "@/components/site/theme-types";
 import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 
 // One variable family carries both the heavy headlines and the body text.
-const display = localFont({ src: "../../../app/fonts/Archivo-latin.woff2", weight: "400 900", variable: "--nf-portal-display", display: "swap", preload: false });
+const portalDisplay = localFont({ src: "../../../app/fonts/Archivo-latin.woff2", weight: "400 900", variable: "--nf-portal-display", display: "swap", preload: false });
 
 const dayFormat = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" });
 const CATEGORY_COLOURS = 6;
@@ -124,4 +124,4 @@ function Home({ items, query, page }: HomeProps) {
   );
 }
 
-export const theme: SiteThemeModule = { fonts: [display], Home };
+export const theme: SiteThemeModule = { fonts: [portalDisplay], Home };

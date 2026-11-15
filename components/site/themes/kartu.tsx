@@ -5,7 +5,7 @@ import { ArticleCard, EmptyState, formatDate } from "@/components/site/shell";
 import type { HomeProps, SiteThemeModule } from "@/components/site/theme-types";
 import type { SiteListItem } from "@/lib/site";
 
-const display = localFont({ src: "../../../app/fonts/Nunito-latin.woff2", weight: "400 800", variable: "--nf-kartu-display", display: "swap", preload: false });
+const kartuDisplay = localFont({ src: "../../../app/fonts/Nunito-latin.woff2", weight: "400 800", variable: "--nf-kartu-display", display: "swap", preload: false });
 
 function Results({ items }: { items: SiteListItem[] }) {
   return (
@@ -44,4 +44,4 @@ function Home({ items, query, page }: HomeProps) {
   );
 }
 
-export const theme: SiteThemeModule = { fonts: [display], Home };
+export const theme: SiteThemeModule = { fonts: [kartuDisplay], Home };

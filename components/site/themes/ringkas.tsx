@@ -6,8 +6,8 @@ import { EmptyState, formatDate } from "@/components/site/shell";
 import type { HomeProps, SiteThemeModule } from "@/components/site/theme-types";
 import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 
-const display = localFont({ src: "../../../app/fonts/LibreBaskerville-latin.woff2", weight: "400 700", variable: "--nf-ringkas-display", display: "swap", preload: false });
-const body = localFont({ src: "../../../app/fonts/PublicSans-latin.woff2", weight: "400 700", variable: "--nf-ringkas-body", display: "swap", preload: false });
+const ringkasDisplay = localFont({ src: "../../../app/fonts/LibreBaskerville-latin.woff2", weight: "400 700", variable: "--nf-ringkas-display", display: "swap", preload: false });
+const ringkasBody = localFont({ src: "../../../app/fonts/PublicSans-latin.woff2", weight: "400 700", variable: "--nf-ringkas-body", display: "swap", preload: false });
 
 /** Stories per page; the rank on later pages continues from the previous page. */
 const PAGE_SIZE = 12;
@@ -83,4 +83,4 @@ function Home({ items, query, page }: HomeProps) {
   );
 }
 
-export const theme: SiteThemeModule = { fonts: [display, body], Home };
+export const theme: SiteThemeModule = { fonts: [ringkasDisplay, ringkasBody], Home };

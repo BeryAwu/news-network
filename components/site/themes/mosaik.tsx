@@ -6,8 +6,8 @@ import { EmptyState, formatDate } from "@/components/site/shell";
 import type { HomeProps, SiteThemeModule } from "@/components/site/theme-types";
 import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 
-const display = localFont({ src: "../../../app/fonts/Anton-latin.woff2", weight: "400", variable: "--nf-mosaik-display", display: "swap", preload: false });
-const body = localFont({ src: "../../../app/fonts/Archivo-latin.woff2", weight: "400 800", variable: "--nf-mosaik-body", display: "swap", preload: false });
+const mosaikDisplay = localFont({ src: "../../../app/fonts/Anton-latin.woff2", weight: "400", variable: "--nf-mosaik-display", display: "swap", preload: false });
+const mosaikBody = localFont({ src: "../../../app/fonts/Archivo-latin.woff2", weight: "400 800", variable: "--nf-mosaik-body", display: "swap", preload: false });
 
 /** Tile sizes in grid order; the pattern repeats every 7 stories: one 2x2, four 1x1, two 2x1. */
 const PATTERN = ["lg", "sm", "sm", "sm", "sm", "wide", "wide"] as const;
@@ -71,4 +71,4 @@ function Home({ items, query, page }: HomeProps) {
   );
 }
 
-export const theme: SiteThemeModule = { fonts: [display, body], Home };
+export const theme: SiteThemeModule = { fonts: [mosaikDisplay, mosaikBody], Home };

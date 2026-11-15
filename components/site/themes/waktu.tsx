@@ -7,8 +7,8 @@ import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 import "@/app/css/themes/waktu.css";
 
 // Schibsted Grotesk carries headlines and text (the stylesheet maps both font slots to it); JetBrains Mono sets the clock times.
-const display = localFont({ src: "../../../app/fonts/SchibstedGrotesk-latin.woff2", weight: "400 800", variable: "--nf-waktu-display", display: "swap", preload: false });
-const outlier = localFont({ src: "../../../app/fonts/JetBrainsMono-latin.woff2", weight: "400 600", variable: "--nf-waktu-outlier", display: "swap", preload: false });
+const waktuDisplay = localFont({ src: "../../../app/fonts/SchibstedGrotesk-latin.woff2", weight: "400 800", variable: "--nf-waktu-display", display: "swap", preload: false });
+const waktuOutlier = localFont({ src: "../../../app/fonts/JetBrainsMono-latin.woff2", weight: "400 600", variable: "--nf-waktu-outlier", display: "swap", preload: false });
 
 const dayLabel = new Intl.DateTimeFormat("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Jakarta" });
 const dayIso = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "Asia/Jakarta" });
@@ -79,4 +79,4 @@ function Home({ items, query, page }: HomeProps) {
   );
 }
 
-export const theme: SiteThemeModule = { fonts: [display, outlier], Home };
+export const theme: SiteThemeModule = { fonts: [waktuDisplay, waktuOutlier], Home };

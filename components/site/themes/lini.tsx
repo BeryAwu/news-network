@@ -7,7 +7,7 @@ import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 import "@/app/css/themes/lini.css";
 
 // One humanist family carries headlines and text; the stylesheet maps both font slots to it.
-const display = localFont({ src: "../../../app/fonts/SourceSans3-latin.woff2", weight: "400 800", variable: "--nf-lini-display", display: "swap", preload: false });
+const liniDisplay = localFont({ src: "../../../app/fonts/SourceSans3-latin.woff2", weight: "400 800", variable: "--nf-lini-display", display: "swap", preload: false });
 
 function Meta({ item }: { item: SiteListItem }) {
   return (
@@ -60,4 +60,4 @@ function Home({ items, query, page }: HomeProps) {
   return <div className="l-stream">{items.map((item, i) => <Story key={item.slug} item={item} first={page === 1 && i === 0} />)}</div>;
 }
 
-export const theme: SiteThemeModule = { fonts: [display], Home };
+export const theme: SiteThemeModule = { fonts: [liniDisplay], Home };

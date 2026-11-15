@@ -6,8 +6,8 @@ import type { HomeProps, SiteThemeModule } from "@/components/site/theme-types";
 import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 import "@/app/css/themes/gelap.css";
 
-const display = localFont({ src: "../../../app/fonts/BarlowCondensed-700-latin.woff2", weight: "700", variable: "--nf-gelap-display", display: "swap", preload: false });
-const body = localFont({
+const gelapDisplay = localFont({ src: "../../../app/fonts/BarlowCondensed-700-latin.woff2", weight: "700", variable: "--nf-gelap-display", display: "swap", preload: false });
+const gelapBody = localFont({
   src: [
     { path: "../../../app/fonts/Barlow-400-latin.woff2", weight: "400", style: "normal" },
     { path: "../../../app/fonts/Barlow-600-latin.woff2", weight: "600", style: "normal" },
@@ -114,4 +114,4 @@ function Home({ items, query, page }: HomeProps) {
   );
 }
 
-export const theme: SiteThemeModule = { fonts: [display, body], Home };
+export const theme: SiteThemeModule = { fonts: [gelapDisplay, gelapBody], Home };

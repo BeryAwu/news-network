@@ -6,8 +6,8 @@ import { EmptyState, formatDate } from "@/components/site/shell";
 import type { HomeProps, SiteThemeModule } from "@/components/site/theme-types";
 import { cloudinaryUrl, type SiteListItem } from "@/lib/site";
 
-const display = localFont({ src: "../../../app/fonts/BodoniModa-latin.woff2", weight: "400 900", variable: "--nf-majalah-display", display: "swap", preload: false });
-const body = localFont({ src: "../../../app/fonts/HankenGrotesk-latin.woff2", weight: "400 600", variable: "--nf-majalah-body", display: "swap", preload: false });
+const majalahDisplay = localFont({ src: "../../../app/fonts/BodoniModa-latin.woff2", weight: "400 900", variable: "--nf-majalah-display", display: "swap", preload: false });
+const majalahBody = localFont({ src: "../../../app/fonts/HankenGrotesk-latin.woff2", weight: "400 600", variable: "--nf-majalah-body", display: "swap", preload: false });
 
 const captionOf = (item: SiteListItem) => [item.image?.caption, item.image?.credit].filter(Boolean).join(", ");
 
@@ -97,4 +97,4 @@ function Home({ items, query, page }: HomeProps) {
   );
 }
 
-export const theme: SiteThemeModule = { fonts: [display, body], Home };
+export const theme: SiteThemeModule = { fonts: [majalahDisplay, majalahBody], Home };
