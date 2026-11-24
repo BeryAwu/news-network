@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { audit, requireRole, requireSameOrigin } from "@/lib/auth";
 import { aiConfiguration, currentAiKey } from "@/lib/ai";
-import { addAiKey, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiKeyModel, saveAiModel, saveAiProvider } from "@/lib/ai-settings";
+import { addAiKey, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiKeyModel, saveAiModel, saveAiProvider, saveFreeModels } from "@/lib/ai-settings";
 import { readAiKeyStatus } from "@/lib/ai-status";
 import { jsonError } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -16,8 +16,9 @@ const providerSchema = z.object({ action: z.literal("provider"), provider: z.enu
 const idSchema = z.object({ action: z.enum(["remove", "primary", "reset"]), id: z.string().regex(/^[a-f0-9]{12}$/) });
 const keyModelSchema = z.object({ action: z.literal("keymodel"), id: z.string().regex(/^[a-f0-9]{12}$/), model: modelText });
 const checkSchema = z.object({ action: z.literal("check") });
+const freeModelsSchema = z.object({ action: z.literal("freemodels") });
 const modelsSchema = z.object({ action: z.literal("models"), baseUrl: baseUrlText.optional(), apiKey: keyText.optional() });
-const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, modelsSchema]);
+const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, freeModelsSchema, modelsSchema]);
 
 /** Owner-only. Keys are never returned, only their last four characters. */
 async function owner(request: Request, mutating: boolean) {
@@ -45,6 +46,17 @@ export async function POST(request: Request) {
     const user = await owner(request, true);
     const input = bodySchema.parse(await request.json());
     const saved = await readAiSettings();
+
+    if (input.action === "freemodels") {
+      const key = saved.keys.find((k) => k.secret)?.secret || null;
+      if (!key) return Response.json({ error: "Tambah kunci API dulu sebelum mengambil daftar model gratis." }, { status: 400 });
+      const baseUrl = saved.baseUrl || OPENROUTER_BASE_URL;
+      const list = await listAiModels(key, baseUrl);
+      if (!list.ok) return Response.json({ error: list.reason }, { status: 422 });
+      await saveFreeModels(list.freeModels);
+      await audit(user.id, "AI_FREE_MODELS_REFRESHED", "IntegrationSetting", "ai.freeModels", null, { count: list.freeModels.length });
+      return Response.json({ status: await readAiKeyStatus(), freeCount: list.freeModels.length });
+    }
 
     if (input.action === "check") {
       const current = await currentAiKey();

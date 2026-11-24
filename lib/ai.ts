@@ -26,12 +26,12 @@ export function validateDraftEvidence(draft: ArticleDraft, facts: EvidenceFact[]
 export interface AiConfiguration { configured: boolean; mode: string; provider: string | null; model: string | null; keySource: "dashboard" | "env" | null; baseUrl: string | null }
 /** One key to try, in order. `id` is the dashboard key id, or null for the server environment key. */
 interface AiCandidate { id: string | null; apiKey: string; provider: string; baseUrl: string; model: string | null }
-interface AiCredentials extends AiConfiguration { candidates: AiCandidate[]; fallbackModel: string }
+interface AiCredentials extends AiConfiguration { candidates: AiCandidate[]; fallbackModel: string; freeModels: string[] }
 
 /** Dashboard keys (healthy first) come before the server environment key; read fresh on every call. */
 async function resolveAi(): Promise<AiCredentials> {
   const test = process.env.AI_TEST_ADAPTER === "true" && process.env.NODE_ENV !== "production";
-  if (test) return { configured: true, mode: "test adapter", provider: "test", model: "deterministic-test-v1", baseUrl: null, keySource: null, candidates: [], fallbackModel: "" };
+  if (test) return { configured: true, mode: "test adapter", provider: "test", model: "deterministic-test-v1", baseUrl: null, keySource: null, candidates: [], fallbackModel: "", freeModels: [] };
   const saved = await readAiSettings();
   const envProvider = process.env.AI_PROVIDER?.trim().toLowerCase() || "";
   const dashboard = attemptOrder(saved.keys).map((key): AiCandidate => {
@@ -49,7 +49,7 @@ async function resolveAi(): Promise<AiCredentials> {
   const envModel = provider === "openrouter" || !dashboard.length ? process.env.AI_MODEL : "";
   const model = saved.model || envModel || (provider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : null);
   const mode = candidates.length ? "credentials configured" : !envProvider ? "not configured" : !supported ? "unsupported provider" : "not configured";
-  return { configured: candidates.length > 0, mode, provider, model, baseUrl, keySource: dashboard.length ? "dashboard" : envCandidates.length ? "env" : null, candidates, fallbackModel };
+  return { configured: candidates.length > 0, mode, provider, model, baseUrl, keySource: dashboard.length ? "dashboard" : envCandidates.length ? "env" : null, candidates, fallbackModel, freeModels: saved.freeModels };
 }
 export async function aiConfiguration(): Promise<AiConfiguration> {
   const { configured, mode, provider, model, baseUrl, keySource } = await resolveAi();
@@ -124,17 +124,31 @@ async function draftWith(config: AiCredentials, candidate: AiCandidate | null, b
   const started = Date.now();
   if (provider === "test") return { draft: testDraft(input), provider, model: config.model || "deterministic-test-v1", promptVersion: PROMPT_VERSION, latencyMs: Date.now() - started, inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"), inputTokens: null as number | null, outputTokens: null as number | null, changeSummary: "Adapter uji deterministik; verifikasi editorial tetap diwajibkan." };
   const base = candidate?.baseUrl ?? "";
-  const model = candidate?.model || config.model || "gpt-4o-mini";
+  // If no model is explicitly set, pick a random free model; otherwise use configured model
+  const autoModel = config.freeModels.length > 0 ? config.freeModels[Math.floor(Math.random() * config.freeModels.length)] : "gpt-4o-mini";
+  const primaryModel = candidate?.model || config.model || autoModel;
+  // Build model rotation list: primary first, then shuffled free models (skip duplicates)
+  const freePool = config.freeModels.filter((m) => m !== primaryModel).sort(() => Math.random() - 0.5);
+  const modelQueue = [primaryModel, ...freePool];
   const firstAttemptMessage = `${JSON.stringify(input)}\n\nReturn JSON with title, excerpt, body, suggestedCategory, tags, seoTitle, metaDescription, slugSuggestion, imageBrief, claimsUsed as {claimText,sourceFactIds} objects, and uncertainties.`;
   let likelyError: string | null = null;
   const lastError = await (async () => {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const attemptModel = attempt === 0 ? model : config.fallbackModel;
-      const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${candidate?.apiKey}`, "content-type": "application/json", ...(provider === "openrouter" ? { "HTTP-Referer": process.env.ADMIN_BASE_URL || "http://localhost:3000", "X-OpenRouter-Title": "News Network Management System" } : {}) }, signal: AbortSignal.timeout(180000), body: JSON.stringify({ model: attemptModel, temperature: 0.4, max_tokens: 3000, response_format: { type: "json_object" }, ...(provider === "openrouter" ? { provider: { require_parameters: true, data_collection: "deny" } } : {}), messages: [{ role: "system", content: input.requirements }, { role: "user", content: attempt === 0 ? firstAttemptMessage : `${firstAttemptMessage}\n\nYour previous response failed validation with these errors, and must be fixed:\n${JSON.stringify({ errors: likelyError }, null, 2)}` }] }) });
+    for (let mi = 0; mi < Math.min(modelQueue.length, 6); mi += 1) {
+      const attemptModel = modelQueue[mi];
+      let response: Response;
+      try {
+        response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${candidate?.apiKey}`, "content-type": "application/json", ...(provider === "openrouter" ? { "HTTP-Referer": process.env.ADMIN_BASE_URL || "http://localhost:3000", "X-OpenRouter-Title": "News Network Management System" } : {}) }, signal: AbortSignal.timeout(90000), body: JSON.stringify({ model: attemptModel, temperature: 0.4, max_tokens: 3000, response_format: { type: "json_object" }, ...(provider === "openrouter" ? { provider: { require_parameters: true, data_collection: "deny" } } : {}), messages: [{ role: "system", content: input.requirements }, { role: "user", content: mi === 0 ? firstAttemptMessage : likelyError ? `${firstAttemptMessage}\n\nYour previous response failed validation with these errors, and must be fixed:\n${JSON.stringify({ errors: likelyError }, null, 2)}` : firstAttemptMessage }] }) });
+      } catch {
+        // Network error or timeout — try next free model
+        likelyError = `Model ${attemptModel} timed out or unreachable.`;
+        continue;
+      }
+      // 524/429/503 = slow/busy — try next model; 401/402/403/404 = key/model issue — throw
+      if (response.status === 524 || response.status === 429 || response.status === 503) { likelyError = `Model ${attemptModel} returned ${response.status}.`; continue; }
       if (!response.ok) throw new AiProviderError(response.status, attemptModel);
       const result = await response.json() as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
       const content = result.choices?.[0]?.message?.content;
-      if (!content) throw new Error("AI provider returned no structured article.");
+      if (!content) { likelyError = "AI provider returned no structured article."; continue; }
       let parsed: unknown;
       try { parsed = JSON.parse(content); } catch { likelyError = "The provider did not return valid JSON."; continue; }
       try {
@@ -142,14 +156,14 @@ async function draftWith(config: AiCredentials, candidate: AiCandidate | null, b
         return { draft, provider, model: attemptModel, promptVersion: PROMPT_VERSION, latencyMs: Date.now() - started, inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"), inputTokens: result.usage?.prompt_tokens ?? null, outputTokens: result.usage?.completion_tokens ?? null, changeSummary: instruction ? `AI revision requested: ${instruction}` : "Initial AI article draft." };
       } catch (error) {
         const retryable = error instanceof DraftEvidenceValidationError || (error instanceof Error && (error.message.includes("Too small") || error.message.includes("Invalid input")));
-        if (attempt === 0 && retryable) {
+        if (retryable) {
           likelyError = error instanceof DraftEvidenceValidationError ? `${error.message} Fix every problem listed above before resubmitting.` : error.message;
           continue;
         }
         throw error;
       }
     }
-    throw new Error("AI provider returned an invalid structured article twice.");
+    throw new Error(likelyError ?? "AI provider returned an invalid structured article after all model attempts.");
   })();
   return lastError;
 }

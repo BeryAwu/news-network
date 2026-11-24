@@ -18,15 +18,15 @@ export interface AiKeyView {
 /** What the owner sees about AI keys. Never contains a full key. */
 export interface AiKeyStatus {
   configured: boolean;
-  /** Where the next AI call gets its key. */
   source: "dashboard" | "env" | null;
   provider: string | null;
   baseUrl: string | null;
   model: string | null;
-  /** The server environment has a key too; it is the last fallback. */
   envKey: boolean;
   keys: AiKeyView[];
   testMode: boolean;
+  /** Number of free models cached for auto-rotation. */
+  freeModelCount: number;
 }
 
 export async function readAiKeyStatus(): Promise<AiKeyStatus> {
@@ -40,5 +40,6 @@ export async function readAiKeyStatus(): Promise<AiKeyStatus> {
     envKey: Boolean(process.env.AI_API_KEY) && ["openai", "openai-compatible", "openrouter"].includes(process.env.AI_PROVIDER?.trim().toLowerCase() ?? ""),
     keys: saved.keys.map((key) => ({ id: key.id, label: key.label, hint: key.hint, status: key.status, unreadable: key.secret === null, cooldownUntil: key.cooldownUntil?.toISOString() ?? null, lastError: key.lastError, lastUsedAt: key.lastUsedAt?.toISOString() ?? null, addedByName: key.addedByName, model: key.model })),
     testMode: config.mode === "test adapter",
+    freeModelCount: saved.freeModels.length,
   };
 }

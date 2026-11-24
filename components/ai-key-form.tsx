@@ -114,7 +114,12 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   async function saveModel() {
     if (!model.trim()) { setNotice({ tone: "error", text: "Isi nama model dulu." }); return; }
     const data = await call("POST", { action: "model", model: model.trim() }, "model");
-    if (data) { setModel(""); setNotice({ tone: "success", text: "Model diganti dan sudah diuji." }); }
+    if (data) { setModel(""); setNotice({ tone: "success", text: "Model disimpan." }); }
+  }
+
+  async function refreshFreeModels() {
+    const data = await call("POST", { action: "freemodels" }, "freemodels");
+    if (data) setNotice({ tone: "success", text: `${(data as { freeCount?: number }).freeCount ?? 0} model gratis tersimpan. Sistem akan otomatis rotasi saat model utama lambat atau penuh.` });
   }
 
   async function saveKeyModel(key: AiKeyView) {
@@ -230,7 +235,7 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
       </section>
 
       <details className="ai-setup-section" open={Boolean(status.model)}>
-        <summary><span><strong>03</strong> Model</span><small>{status.model || "Belum dipilih"}</small></summary>
+        <summary><span><strong>03</strong> Model</span><small>{status.model ? status.model : status.freeModelCount > 0 ? `Otomatis (${status.freeModelCount} model gratis)` : "Belum dipilih"}</small></summary>
         <div className="ai-setup-content">
           <div className="model-picker">
             <div className="model-picker-toolbar">
@@ -264,7 +269,8 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
             </div>
           )}
           <div className="actions">
-            <button type="button" className="btn btn-primary" disabled={busy !== null || !candidate} onClick={saveModel}>{busy === "model" ? "Menguji…" : "Simpan model"}</button>
+            <button type="button" className="btn btn-primary" disabled={busy !== null || !candidate} onClick={saveModel}>{busy === "model" ? "Menyimpan…" : "Simpan model"}</button>
+            <button type="button" className="btn" disabled={busy !== null} onClick={refreshFreeModels}>{busy === "freemodels" ? "Mengambil…" : `Perbarui model gratis${status.freeModelCount > 0 ? ` (${status.freeModelCount})` : ""}`}</button>
           </div>
           <span className="field-help">Gunakan nama persis dari katalog penyedia, termasuk prefix — misal <code>ngodeai/glm-5.3-flash</code>.</span>
         </div>
