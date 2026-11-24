@@ -54,6 +54,7 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   const [modelQuery, setModelQuery] = useState("");
   const [freeOnly, setFreeOnly] = useState(false);
   const [keyModels, setKeyModels] = useState<Record<string, string>>({});
+  const [bulkKeys, setBulkKeys] = useState("");
 
   const providerMeta = PROVIDERS.find((p) => p.value === provider) ?? PROVIDERS[0];
   const effectiveBaseUrl = baseUrl.trim() || providerMeta.defaultBaseUrl;
@@ -90,6 +91,17 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   async function saveProvider() {
     const data = await call("POST", { action: "provider", provider, baseUrl: effectiveBaseUrl }, "provider");
     if (data) setNotice({ tone: "success", text: `Penyedia disimpan: ${providerMeta.label} · ${effectiveBaseUrl}` });
+  }
+
+  async function addBulk() {
+    const keys = bulkKeys.split(/[\n,]+/).map((k) => k.trim()).filter((k) => k.length >= 20);
+    if (!keys.length) { setNotice({ tone: "error", text: "Tidak ada kunci yang valid. Paste satu kunci per baris." }); return; }
+    const data = await call("POST", { action: "bulk", apiKeys: keys }, "bulk");
+    if (data) {
+      setBulkKeys("");
+      const added = (data as { added?: number }).added ?? 0;
+      setNotice({ tone: "success", text: `${added} kunci baru ditambahkan${added < keys.length ? `, ${keys.length - added} sudah ada sebelumnya` : ""}.` });
+    }
   }
 
   async function add() {
@@ -191,7 +203,7 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
       </details>
 
       <section className="ai-setup-section ai-key-entry" aria-labelledby="ai-key-entry-title">
-        <div className="ai-setup-section-heading"><div><h3 id="ai-key-entry-title"><strong>02</strong> Kunci API</h3><p>Tambah kunci baru setelah penyedia dipilih.</p></div><span>{status.keys.length} tersimpan</span></div>
+        <div className="ai-setup-section-heading"><div><h3 id="ai-key-entry-title"><strong>02</strong> Kunci API</h3><p>Kunci dipakai bergantian otomatis per request (round-robin). Tambah banyak kunci sekaligus untuk menghindari limit.</p></div><span>{status.keys.length} tersimpan</span></div>
         {status.keys.length > 0 && <ol className="ai-key-list" aria-label="Daftar kunci, dicoba dari atas ke bawah">
           {status.keys.map((key, index) => {
             const state = keyState(key, index === 0);
@@ -219,7 +231,15 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
           })}
         </ol>}
         <div className="field">
-        <label htmlFor="ai-key-input">Tambah kunci API</label>
+          <label htmlFor="ai-bulk-input">Tambah banyak kunci sekaligus</label>
+          <textarea id="ai-bulk-input" className="ai-bulk-textarea" autoComplete="off" spellCheck={false} value={bulkKeys} onChange={(e) => setBulkKeys(e.target.value)} placeholder={"sk-or-v1-abc...\nsk-or-v1-def...\nsk-or-v1-ghi..."} rows={4} />
+          <span className="field-help">Paste satu kunci per baris. Duplikat otomatis dilewati. Kunci langsung aktif tanpa uji.</span>
+          <div className="actions">
+            <button type="button" className="btn btn-primary" disabled={busy !== null || !bulkKeys.trim()} onClick={addBulk}>{busy === "bulk" ? "Menyimpan…" : "Simpan semua kunci"}</button>
+          </div>
+        </div>
+        <div className="field">
+        <label htmlFor="ai-key-input">Atau tambah satu kunci (dengan uji)</label>
         <div className="password-wrap">
           <input id="ai-key-input" type={show ? "text" : "password"} autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={providerMeta.hint.split(".")[0] + "…"} />
           <button type="button" className="password-toggle" aria-label={show ? "Sembunyikan kunci" : "Tampilkan kunci"} aria-pressed={show} onClick={() => setShow((value) => !value)}>

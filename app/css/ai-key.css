@@ -32,6 +32,7 @@
   .ai-key-main { display: grid; gap: var(--app-s1); min-width: 0; }
   .ai-key-model-row { display: flex; gap: var(--app-s2); align-items: center; width: 100%; }
   .ai-key-model-input { flex: 1 1 0; min-width: 0; font-size: var(--app-text-sm); }
+  .ai-bulk-textarea { font-family: monospace; font-size: var(--app-text-sm); resize: vertical; min-height: 80px; }
   .ai-key-state { font-weight: 700; }
   .ai-key-ok { color: var(--app-success); }
   .ai-key-warn { color: var(--app-warn); }

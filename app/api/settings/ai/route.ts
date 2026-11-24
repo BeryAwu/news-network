@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { audit, requireRole, requireSameOrigin } from "@/lib/auth";
 import { aiConfiguration, currentAiKey } from "@/lib/ai";
-import { addAiKey, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiKeyModel, saveAiModel, saveAiProvider, saveFreeModels } from "@/lib/ai-settings";
+import { addAiKey, addAiKeysBulk, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiKeyModel, saveAiModel, saveAiProvider, saveFreeModels } from "@/lib/ai-settings";
 import { readAiKeyStatus } from "@/lib/ai-status";
 import { jsonError } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -17,8 +17,9 @@ const idSchema = z.object({ action: z.enum(["remove", "primary", "reset"]), id: 
 const keyModelSchema = z.object({ action: z.literal("keymodel"), id: z.string().regex(/^[a-f0-9]{12}$/), model: modelText });
 const checkSchema = z.object({ action: z.literal("check") });
 const freeModelsSchema = z.object({ action: z.literal("freemodels") });
+const bulkSchema = z.object({ action: z.literal("bulk"), apiKeys: z.array(keyText).min(1).max(50) });
 const modelsSchema = z.object({ action: z.literal("models"), baseUrl: baseUrlText.optional(), apiKey: keyText.optional() });
-const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, freeModelsSchema, modelsSchema]);
+const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, freeModelsSchema, bulkSchema, modelsSchema]);
 
 /** Owner-only. Keys are never returned, only their last four characters. */
 async function owner(request: Request, mutating: boolean) {
@@ -46,6 +47,15 @@ export async function POST(request: Request) {
     const user = await owner(request, true);
     const input = bodySchema.parse(await request.json());
     const saved = await readAiSettings();
+
+    if (input.action === "bulk") {
+      const total = saved.keys.length;
+      if (total >= MAX_KEYS) return Response.json({ error: `Sudah ${MAX_KEYS} kunci tersimpan. Hapus beberapa dulu.` }, { status: 400 });
+      const allowed = input.apiKeys.slice(0, MAX_KEYS - total);
+      const added = await addAiKeysBulk(user, allowed);
+      await audit(user.id, "AI_KEYS_BULK_ADDED", "IntegrationSetting", "bulk", null, { added, total: total + added });
+      return Response.json({ status: await readAiKeyStatus(), added });
+    }
 
     if (input.action === "freemodels") {
       const key = saved.keys.find((k) => k.secret)?.secret || null;

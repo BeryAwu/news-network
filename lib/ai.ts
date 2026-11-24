@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { attemptOrder, DEFAULT_OPENROUTER_MODEL, OPENROUTER_BASE_URL, readAiSettings, recordKeyOutcome } from "@/lib/ai-settings";
+import { attemptOrder, DEFAULT_OPENROUTER_MODEL, OPENROUTER_BASE_URL, readAiSettings, recordKeyOutcome, roundRobinKey } from "@/lib/ai-settings";
 
 export const PROMPT_VERSION = "news-draft-id-v3";
 export const articleDraftSchema = z.object({ title: z.string().min(8).max(180), excerpt: z.string().min(12).max(500), body: z.string().min(120).max(30000), suggestedCategory: z.string().max(100), tags: z.array(z.string().max(40)).max(12), seoTitle: z.string().max(180), metaDescription: z.string().max(300), slugSuggestion: z.string().max(140), imageBrief: z.string().max(1000), claimsUsed: z.array(z.object({ claimText: z.string().min(1).max(500), sourceFactIds: z.array(z.string().max(80)).max(10) })).max(50), uncertainties: z.array(z.string().max(500)).max(50) });
@@ -34,22 +34,24 @@ async function resolveAi(): Promise<AiCredentials> {
   if (test) return { configured: true, mode: "test adapter", provider: "test", model: "deterministic-test-v1", baseUrl: null, keySource: null, candidates: [], fallbackModel: "", freeModels: [] };
   const saved = await readAiSettings();
   const envProvider = process.env.AI_PROVIDER?.trim().toLowerCase() || "";
-  const dashboard = attemptOrder(saved.keys).map((key): AiCandidate => {
-    const provider = saved.provider || "openrouter";
-    const baseUrl = saved.baseUrl || (provider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1");
-    return { id: key.id, apiKey: key.secret as string, provider, baseUrl, model: key.model };
-  });
+  const allUsable = saved.keys.filter((k) => k.secret && k.status !== "rejected");
+  const primary = await roundRobinKey(allUsable);
+  const provider = saved.provider || "openrouter";
+  const baseUrl = saved.baseUrl || (provider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1");
+  const dashboard: AiCandidate[] = primary
+    ? [{ id: primary.id, apiKey: primary.secret as string, provider, baseUrl, model: primary.model },
+       ...allUsable.filter((k) => k.id !== primary.id).map((k): AiCandidate => ({ id: k.id, apiKey: k.secret as string, provider, baseUrl, model: k.model }))]
+    : [];
   const supported = envProvider === "openai" || envProvider === "openai-compatible" || envProvider === "openrouter";
   const envCandidates: AiCandidate[] = supported && process.env.AI_API_KEY ? [{ id: null, apiKey: process.env.AI_API_KEY, provider: envProvider, baseUrl: process.env.AI_BASE_URL || (envProvider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1"), model: null }] : [];
   const candidates = [...dashboard, ...envCandidates];
-  const provider = candidates[0]?.provider ?? (envProvider || null);
-  const baseUrl = candidates[0]?.baseUrl ?? null;
-  // The retry model must exist at the same provider as the key: an OpenRouter-only model name is a 404 everywhere else.
-  const fallbackModel = process.env.AI_FALLBACK_MODEL || (provider === "openrouter" || !provider ? "qwen/qwen3-32b" : saved.model || "");
-  const envModel = provider === "openrouter" || !dashboard.length ? process.env.AI_MODEL : "";
-  const model = saved.model || envModel || (provider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : null);
+  const resolvedProvider = candidates[0]?.provider ?? (envProvider || null);
+  const resolvedBaseUrl = candidates[0]?.baseUrl ?? null;
+  const fallbackModel = process.env.AI_FALLBACK_MODEL || (resolvedProvider === "openrouter" || !resolvedProvider ? "qwen/qwen3-32b" : saved.model || "");
+  const envModel = resolvedProvider === "openrouter" || !dashboard.length ? process.env.AI_MODEL : "";
+  const model = saved.model || envModel || (resolvedProvider === "openrouter" ? DEFAULT_OPENROUTER_MODEL : null);
   const mode = candidates.length ? "credentials configured" : !envProvider ? "not configured" : !supported ? "unsupported provider" : "not configured";
-  return { configured: candidates.length > 0, mode, provider, model, baseUrl, keySource: dashboard.length ? "dashboard" : envCandidates.length ? "env" : null, candidates, fallbackModel, freeModels: saved.freeModels };
+  return { configured: candidates.length > 0, mode, provider: resolvedProvider, model, baseUrl: resolvedBaseUrl, keySource: dashboard.length ? "dashboard" : envCandidates.length ? "env" : null, candidates, fallbackModel, freeModels: saved.freeModels };
 }
 export async function aiConfiguration(): Promise<AiConfiguration> {
   const { configured, mode, provider, model, baseUrl, keySource } = await resolveAi();

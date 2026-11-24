@@ -8,6 +8,7 @@ const KEY_MODEL_PREFIX = "ai.keymodel.";
 const KEY_FREE_MODELS = "ai.freeModels";
 const KEY_PROVIDER = "ai.provider";
 const KEY_BASE_URL = "ai.baseUrl";
+const KEY_INDEX = "ai.keyIndex";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-235b-a22b-2507";
@@ -68,6 +69,28 @@ export async function addAiKey(by: { name: string }, input: { apiKey: string; la
   const id = randomBytes(6).toString("hex");
   await db.integrationSetting.create({ data: { key: KEY_PREFIX + id, value: encryptSecret(input.apiKey), hint: input.apiKey.slice(-4), label: (input.label ?? "").trim().slice(0, 40), position: existing.length ? Math.max(...existing.map((row) => row.position)) + 1 : 0, updatedByName: by.name } });
   return id;
+}
+
+/** Adds multiple keys at once, skipping duplicates. Returns count of actually added keys. */
+export async function addAiKeysBulk(by: { name: string }, apiKeys: string[]): Promise<number> {
+  const existing = await db.integrationSetting.findMany({ where: { key: { startsWith: KEY_PREFIX } } });
+  const existingSecrets = new Set(existing.map((row) => decryptSecret(row.value)).filter(Boolean));
+  const maxPos = existing.length ? Math.max(...existing.map((row) => row.position)) : -1;
+  const toAdd = [...new Set(apiKeys)].filter((k) => !existingSecrets.has(k));
+  if (!toAdd.length) return 0;
+  await db.integrationSetting.createMany({ data: toAdd.map((apiKey, i) => ({ key: KEY_PREFIX + randomBytes(6).toString("hex"), value: encryptSecret(apiKey), hint: apiKey.slice(-4), label: "", position: maxPos + 1 + i, updatedByName: by.name })) });
+  return toAdd.length;
+}
+
+/** Atomically increments round-robin index and returns the next usable key. Never throws. */
+export async function roundRobinKey(keys: StoredAiKey[]): Promise<StoredAiKey | null> {
+  const usable = keys.filter((k) => k.secret && k.status !== "rejected");
+  if (!usable.length) return null;
+  try {
+    const row = await db.integrationSetting.upsert({ where: { key: KEY_INDEX }, create: { key: KEY_INDEX, value: "0", updatedByName: "system" }, update: { value: String((parseInt((await db.integrationSetting.findUnique({ where: { key: KEY_INDEX } }))?.value ?? "0", 10) + 1) % usable.length) } });
+    const idx = parseInt(row.value, 10) % usable.length;
+    return usable[idx];
+  } catch { return usable[0]; }
 }
 
 export async function removeAiKey(id: string) {
