@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
+import { Fragment } from "react";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { AUTHOR_COOKIE, verifyAuthorToken } from "@/lib/author-link";
-import { ArticleCard, SiteShell, formatDate } from "@/components/site/shell";
-import { cloudinaryUrl, findPublished, listPublished, paragraphs, requestOrigin, resolveSite } from "@/lib/site";
+import ShareBar from "@/components/site/share-bar";
+import { SectionTitle, SiteShell, StoryCard, StoryRow, formatLongDate, formatTime } from "@/components/site/shell";
+import { adjacentPublished, cloudinaryUrl, findPublished, listPublished, paragraphs, requestOrigin, resolveSite, type SiteListItem } from "@/lib/site";
 
 /** True when the visitor holds a valid author cookie for this host and wrote the story (or is an owner or admin). */
 async function viewerCanEdit(hostname: string, authorId: string) {
@@ -49,9 +51,19 @@ export default async function ArticlePage({ params }: Props) {
   const adminBase = (process.env.ADMIN_BASE_URL || "").replace(/\/$/, "");
   const origin = await requestOrigin();
   const image = snapshot.featuredAsset;
-  const related = category
-    ? (await listPublished(site, { categoryId: site.media.categories.find((c) => c.slug === category.slug)?.id, take: 4 })).items.filter((i) => i.slug !== snapshot.slug).slice(0, 3)
-    : [];
+  const url = `${origin}/articles/${snapshot.slug}`;
+  // Every suggestion on this page comes from the same writer; prev/next follow the site's publishing order.
+  const [{ items: byAuthor }, { previous, next }] = await Promise.all([
+    listPublished(site, { authorId: found.authorId, excludeSlug: snapshot.slug, take: 11 }),
+    adjacentPublished(site, publishedAt, snapshot.slug),
+  ]);
+  const readAlso = byAuthor.slice(0, 2);
+  const related = byAuthor.length > 2 ? byAuthor.slice(2, 5) : byAuthor;
+  const moreFromAuthor = byAuthor.slice(5, 11);
+  const body = paragraphs(snapshot.body);
+  /** "Baca juga" boxes after the 3rd and 7th paragraph, as long as the story is long enough to carry them. */
+  const inlineAfter = new Map<number, SiteListItem>();
+  readAlso.forEach((item, i) => { const at = 2 + i * 4; if (at < body.length - 1) inlineAfter.set(at, item); });
   const jsonLd = {
     "@context": "https://schema.org", "@type": "NewsArticle",
     headline: snapshot.title, description: snapshot.metaDescription || snapshot.excerpt,
@@ -62,24 +74,50 @@ export default async function ArticlePage({ params }: Props) {
     ...(image ? { image: [image.secureUrl] } : {}), keywords: snapshot.tags.join(", "),
   };
   return (
-    <SiteShell site={site}>
+    <SiteShell site={site} current={category?.slug}>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} />
       <article className="site-article">
-        {category && <div className="site-meta"><Link href={`/kategori/${category.slug}`}>{category.name}</Link></div>}
-        <h1>{snapshot.title}</h1>
-        <p className="site-lede">{snapshot.excerpt}</p>
-        <div className="site-byline site-small">
-          <span>Oleh {bylineName}</span>
-          <time dateTime={publishedAt?.toISOString()}>{formatDate(publishedAt)}</time>
-          {showEdit && <a className="site-edit" href={`${adminBase}/blasts/${found.blastId}`}>Edit berita</a>}
-        </div>
+        <nav className="site-crumbs" aria-label="Lokasi halaman">
+          <Link href="/">Beranda</Link>
+          {category && <><span aria-hidden="true">/</span><Link href={`/kategori/${category.slug}`}>{category.name}</Link></>}
+        </nav>
+        <header className="site-article-head">
+          <h1>{snapshot.title}</h1>
+          {snapshot.excerpt && <p className="site-lede">{snapshot.excerpt}</p>}
+          <div className="site-article-meta">
+            <div className="site-author">
+              <span className="site-author-initial" aria-hidden="true">{bylineName.trim().charAt(0).toUpperCase()}</span>
+              <div>
+                <p className="site-author-name">Oleh <strong>{bylineName}</strong></p>
+                <p className="site-author-date"><time dateTime={publishedAt?.toISOString()}>{formatLongDate(publishedAt)}, {formatTime(publishedAt)}</time></p>
+              </div>
+              {showEdit && <a className="site-edit" href={`${adminBase}/blasts/${found.blastId}`}>Edit berita</a>}
+            </div>
+            <ShareBar url={url} title={snapshot.title} />
+          </div>
+        </header>
         {image && (
-          <figure>
-            <Image src={cloudinaryUrl(image.secureUrl, "f_auto,q_auto,w_1440")} alt={image.altText} width={image.width} height={image.height} sizes="(max-width: 760px) 100vw, 720px" priority unoptimized />
+          <figure className="site-article-figure">
+            <Image src={cloudinaryUrl(image.secureUrl, "f_auto,q_auto,w_1600")} alt={image.altText} width={image.width} height={image.height} sizes="(max-width: 980px) 100vw, 960px" priority unoptimized />
             {(image.caption || image.credit || image.isAiGenerated) && <figcaption>{[image.caption, image.credit, image.isAiGenerated ? "Ilustrasi buatan AI" : ""].filter(Boolean).join(", ")}</figcaption>}
           </figure>
         )}
-        <div className="site-body site-dropcap">{paragraphs(snapshot.body).map((p, i) => <p key={i}>{p}</p>)}</div>
+        <div className="site-body">
+          {body.map((p, i) => {
+            const also = inlineAfter.get(i);
+            return (
+              <Fragment key={i}>
+                <p>{p}</p>
+                {also && (
+                  <aside className="site-readalso" aria-label="Baca juga">
+                    <span>Baca juga</span>
+                    <Link href={`/articles/${also.slug}`}>{also.title}</Link>
+                  </aside>
+                )}
+              </Fragment>
+            );
+          })}
+        </div>
         {snapshot.gallery.length > 0 && (
           <div className="site-gallery">
             {snapshot.gallery.map((g) => (
@@ -90,7 +128,8 @@ export default async function ArticlePage({ params }: Props) {
             ))}
           </div>
         )}
-        {snapshot.tags.length > 0 && <div className="site-tags">{snapshot.tags.map((t) => <span key={t}>#{t}</span>)}</div>}
+        {snapshot.tags.length > 0 && <ul className="site-tags" aria-label="Topik">{snapshot.tags.map((t) => <li key={t}>{t}</li>)}</ul>}
+        <div className="site-article-share-end"><ShareBar url={url} title={snapshot.title} /></div>
         {snapshot.aiAssisted && <p className="site-well">Naskah ini dibuat dengan bantuan AI. Redaksi {site.media.displayName} memeriksa dan menyetujuinya sebelum terbit.</p>}
         {snapshot.uncertainties.length > 0 && (
           <section className="site-evidence">
@@ -117,10 +156,22 @@ export default async function ArticlePage({ params }: Props) {
           </section>
         )}
       </article>
+      {(previous || next) && (
+        <nav className="site-prevnext" aria-label="Artikel sebelumnya dan berikutnya">
+          {previous ? <Link href={`/articles/${previous.slug}`} rel="prev" className="is-prev"><span>Artikel sebelumnya</span><strong>{previous.title}</strong></Link> : <span />}
+          {next ? <Link href={`/articles/${next.slug}`} rel="next" className="is-next"><span>Artikel berikutnya</span><strong>{next.title}</strong></Link> : <span />}
+        </nav>
+      )}
       {related.length > 0 && (
-        <section className="site-related">
-          <h2 className="site-heading">Berita terkait</h2>
-          <div className="site-grid">{related.map((item) => <ArticleCard key={item.slug} item={item} />)}</div>
+        <section className="site-related" aria-labelledby="terkait">
+          <SectionTitle id="terkait">Berita terkait dari {bylineName}</SectionTitle>
+          <div className="site-cards">{related.map((item) => <StoryCard key={item.slug} item={item} />)}</div>
+        </section>
+      )}
+      {moreFromAuthor.length > 0 && (
+        <section className="site-related" aria-labelledby="rekomendasi-penulis">
+          <SectionTitle id="rekomendasi-penulis">Rekomendasi lain dari {bylineName}</SectionTitle>
+          <div className="site-rows site-rows-2">{moreFromAuthor.map((item) => <StoryRow key={item.slug} item={item} showExcerpt={false} />)}</div>
         </section>
       )}
     </SiteShell>

@@ -1,6 +1,6 @@
 # Dashboard design system
 
-Applies to every screen behind the login (`app/(dashboard)`), plus `/login`, `/setup` and the 404 page. The public news sites use a separate system (`app/site.css`, Newsprint theme) and must not be touched.
+Applies to every screen behind the login (`app/(dashboard)`), plus `/login`, `/setup` and the 404 page. The public news sites use a separate system (`app/site.css`, one shared layout coloured per media) and must not be touched.
 
 Audience: newsroom staff who are not technical. The tool should read like a to-do list, not an admin console.
 

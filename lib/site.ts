@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { normalizeHostname } from "@/lib/security";
 import { editorialEvidenceSnapshotSchema } from "@/lib/editorial-evidence";
-import { DEFAULT_THEME_SLUG, THEME_SLUGS, themeInfo, type SiteThemeSlug } from "@/lib/site-themes";
+import { DEFAULT_SITE_COLOR } from "@/lib/site-brand";
 
 export const SITE_PAGE_SIZE = 12;
 
@@ -37,13 +37,13 @@ const themeSchema = z.object({
   primary: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().catch(null),
   tagline: z.string().max(160).catch(""),
   logoUrl: z.string().url().startsWith("https://res.cloudinary.com/").nullable().catch(null),
-  template: z.enum(THEME_SLUGS).catch(DEFAULT_THEME_SLUG),
 });
-export interface SiteTheme { primary: string; tagline: string; logoUrl: string | null; template: SiteThemeSlug }
+/** What differs between media sites. A `template` key saved by the old design picker is ignored. */
+export interface SiteTheme { primary: string; tagline: string; logoUrl: string | null }
 export function parseTheme(raw: unknown): SiteTheme {
   const input = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
-  const parsed = themeSchema.parse({ primary: input.primary ?? null, tagline: input.tagline ?? "", logoUrl: input.logoUrl ?? null, template: input.template ?? DEFAULT_THEME_SLUG });
-  return { ...parsed, primary: parsed.primary ?? themeInfo(parsed.template).defaultColor };
+  const parsed = themeSchema.parse({ primary: input.primary ?? null, tagline: input.tagline ?? "", logoUrl: input.logoUrl ?? null });
+  return { ...parsed, primary: parsed.primary ?? DEFAULT_SITE_COLOR };
 }
 
 export async function requestHostname() {
@@ -86,42 +86,72 @@ export interface SiteListItem {
   publishedAt: Date | null;
   category: { name: string; slug: string } | null;
   image: PublishedSnapshot["featuredAsset"];
+  /** Account that wrote the story; groups "from the same writer" lists. */
+  authorId: string;
+  /** Byline shown to readers: the writer's name, or the newsroom byline for older stories. */
+  authorName: string;
 }
 
-function toItem(target: { publishedAt: Date | null; approvedSnapshot: unknown; article: { category: { name: string; slug: string } | null } }): SiteListItem | null {
+const itemSelect = { publishedAt: true, approvedSnapshot: true, article: { select: { createdById: true, category: { select: { name: true, slug: true } } } } } as const;
+
+function toItem(site: Site, target: { publishedAt: Date | null; approvedSnapshot: unknown; article: { createdById: string; category: { name: string; slug: string } | null } }): SiteListItem | null {
   const parsed = publishedSnapshotSchema.safeParse(target.approvedSnapshot);
   if (!parsed.success) return null;
   const s = parsed.data;
-  return { slug: s.slug, title: s.title, excerpt: s.excerpt, publishedAt: target.publishedAt, category: target.article.category, image: s.featuredAsset };
+  return { slug: s.slug, title: s.title, excerpt: s.excerpt, publishedAt: target.publishedAt, category: target.article.category, image: s.featuredAsset, authorId: target.article.createdById, authorName: s.authorName || site.media.newsroomByline };
 }
 
-function listWhere(site: Site, filter: { categoryId?: string; q?: string }) {
+export interface ListFilter {
+  categoryId?: string;
+  q?: string;
+  /** Only stories by this account. */
+  authorId?: string;
+  /** Leave this story out (the one being read). */
+  excludeSlug?: string;
+  /** Only stories published in the last N days. */
+  withinDays?: number;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function listWhere(site: Site, filter: ListFilter): Prisma.PublicationTargetWhereInput {
   const q = filter.q?.trim();
   return {
     domainId: site.domainId,
     mediaSiteId: site.media.id,
-    status: "PUBLISHED" as const,
+    status: "PUBLISHED",
+    ...(filter.withinDays ? { publishedAt: { gte: new Date(Date.now() - filter.withinDays * DAY_MS) } } : {}),
+    ...(filter.excludeSlug ? { NOT: { approvedSnapshot: { path: ["slug"], equals: filter.excludeSlug } } } : {}),
     article: {
       archivedAt: null,
-      status: "PUBLISHED" as const,
+      status: "PUBLISHED",
       ...(filter.categoryId ? { categoryId: filter.categoryId } : {}),
-      ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { excerpt: { contains: q, mode: "insensitive" as const } }] } : {}),
+      ...(filter.authorId ? { createdById: filter.authorId } : {}),
+      ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" } }, { excerpt: { contains: q, mode: "insensitive" } }] } : {}),
     },
   };
 }
 
-export async function listPublished(site: Site, opts: { page?: number; categoryId?: string; q?: string; take?: number } = {}) {
+export async function listPublished(site: Site, opts: ListFilter & { page?: number; take?: number; skip?: number } = {}) {
   const take = opts.take ?? SITE_PAGE_SIZE;
   const page = Math.max(1, Math.min(opts.page ?? 1, 500));
   const where = listWhere(site, opts);
   const [total, rows] = await Promise.all([
     db.publicationTarget.count({ where }),
-    db.publicationTarget.findMany({
-      where, orderBy: { publishedAt: "desc" }, skip: (page - 1) * take, take,
-      select: { publishedAt: true, approvedSnapshot: true, article: { select: { category: { select: { name: true, slug: true } } } } },
-    }),
+    db.publicationTarget.findMany({ where, orderBy: { publishedAt: "desc" }, skip: (opts.skip ?? 0) + (page - 1) * take, take, select: itemSelect }),
   ]);
-  return { total, page, pages: Math.max(1, Math.ceil(total / take)), items: rows.map(toItem).filter((i): i is SiteListItem => i !== null) };
+  return { total, page, pages: Math.max(1, Math.ceil(total / take)), items: rows.map((row) => toItem(site, row)).filter((i): i is SiteListItem => i !== null) };
+}
+
+/** The stories published just before and just after this one on the same site. */
+export async function adjacentPublished(site: Site, publishedAt: Date | null, slug: string) {
+  if (!publishedAt) return { previous: null, next: null };
+  const base = listWhere(site, { excludeSlug: slug });
+  const [previous, next] = await Promise.all([
+    db.publicationTarget.findFirst({ where: { ...base, publishedAt: { lt: publishedAt } }, orderBy: { publishedAt: "desc" }, select: itemSelect }),
+    db.publicationTarget.findFirst({ where: { ...base, publishedAt: { gt: publishedAt } }, orderBy: { publishedAt: "asc" }, select: itemSelect }),
+  ]);
+  return { previous: previous ? toItem(site, previous) : null, next: next ? toItem(site, next) : null };
 }
 
 export async function findPublished(site: Site, slug: string) {

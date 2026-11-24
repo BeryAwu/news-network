@@ -1,5 +1,5 @@
 "use client";
-import { DEFAULT_THEME_SLUG, SITE_THEMES } from "@/lib/site-themes";
+import { DEFAULT_SITE_COLOR } from "@/lib/site-brand";
 
 import "@/app/css/media.css";
 import { useRef, useState } from "react";
@@ -13,8 +13,6 @@ type Site = {
   profile: { niche: string; targetAudience: string; editorialMission: string; toneGuidelines: string; styleGuidelines: string; language: string } | null;
 };
 
-/** The public site falls back to this green when a media has no colour of its own (lib/site.ts). */
-const DEFAULT_BRAND = "#176b4a";
 const LOGO_PREFIX = "https://res.cloudinary.com/";
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
@@ -50,10 +48,9 @@ function contrastAgainstWhite(hex: string) {
 export default function MediaEditForm({ site }: { site: Site }) {
   const router = useRouter();
   const advancedRef = useRef<HTMLDetailsElement>(null);
-  const theme = (typeof site.themeConfig === "object" && site.themeConfig !== null ? site.themeConfig : {}) as { primary?: string; tagline?: string; logoUrl?: string | null; template?: string };
+  const theme = (typeof site.themeConfig === "object" && site.themeConfig !== null ? site.themeConfig : {}) as { primary?: string; tagline?: string; logoUrl?: string | null };
   const profile = site.profile;
   const [displayName, setDisplayName] = useState(site.displayName);
-  const [template, setTemplate] = useState(theme.template || DEFAULT_THEME_SLUG);
   const [primary, setPrimary] = useState(theme.primary || "");
   const [tagline, setTagline] = useState(theme.tagline || "");
   const [logoUrl, setLogoUrl] = useState(theme.logoUrl || "");
@@ -63,7 +60,7 @@ export default function MediaEditForm({ site }: { site: Site }) {
   const [busy, setBusy] = useState(false);
 
   const id = (key: string) => `${site.id}-${key}`;
-  const brand = HEX.test(primary) ? primary : DEFAULT_BRAND;
+  const brand = HEX.test(primary) ? primary : DEFAULT_SITE_COLOR;
   const tooLight = contrastAgainstWhite(brand) < 3;
   const logoValid = logoUrl.startsWith(LOGO_PREFIX) && URL.canParse(logoUrl);
 
@@ -143,29 +140,17 @@ export default function MediaEditForm({ site }: { site: Site }) {
     <hr className="divider"/>
 
     <section className="form-section">
-      <div className="form-intro"><h3>Tampilan situs</h3><p>Warna dan tagline muncul di situs publik. Pratinjau berubah saat Anda mengetik.</p></div>
+      <div className="form-intro"><h3>Tampilan situs</h3><p>Semua media memakai tata letak yang sama. Nama, logo, warna, dan tagline yang membedakan. Pratinjau berubah saat Anda mengetik.</p></div>
       <div className="theme-layout">
         <div className="stack">
-          <fieldset className="field">
-            <legend className="field-label">Desain situs</legend>
-            <div className="choice-list">
-              {SITE_THEMES.map((item) => (
-                <label className="choice" key={item.slug}>
-                  <input type="radio" name="themeTemplate" value={item.slug} checked={template === item.slug} onChange={() => setTemplate(item.slug)}/>
-                  <span className="choice-copy"><strong>{item.name}</strong><small>{item.description}</small></span>
-                </label>
-              ))}
-            </div>
-            <span className="field-help">Tiap media bisa punya desain berbeda. Berita yang sudah terbit ikut tampil dengan desain baru.</span>
-          </fieldset>
           <div className="field">
             <label htmlFor={id("themePrimary")}>Warna utama</label>
             <div className="color-row">
               <input type="color" className="color-swatch" value={brand} onChange={(event) => setPrimary(event.target.value)} aria-label="Pilih warna utama dengan kotak warna"/>
-              <input {...props("themePrimary")} value={primary} onChange={(event) => setPrimary(event.target.value.trim())} maxLength={7} placeholder={DEFAULT_BRAND} spellCheck={false} autoComplete="off" inputMode="text" className="color-hex"/>
+              <input {...props("themePrimary")} value={primary} onChange={(event) => setPrimary(event.target.value.trim())} maxLength={7} placeholder={DEFAULT_SITE_COLOR} spellCheck={false} autoComplete="off" inputMode="text" className="color-hex"/>
               <button type="button" className="btn btn-quiet" onClick={() => setPrimary("")} disabled={!primary}>Pakai warna bawaan</button>
             </div>
-            {help("themePrimary", "Dipakai untuk tombol dan tautan di situs. Kosong berarti warna bawaan dari desain yang dipilih.")}
+            {help("themePrimary", "Semua media memakai tata letak yang sama; warna ini yang membedakan. Dipakai untuk menu, tombol, label kategori, dan tautan. Kosong berarti biru bawaan.")}
             {tooLight && <p className="field-error">Warna ini terang. Tulisan putih di tombol akan sulit dibaca, jadi pilih yang lebih gelap.</p>}
           </div>
           <div className="field">

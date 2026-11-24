@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ArticleCard, EmptyState, Pagination, SiteShell } from "@/components/site/shell";
+import { EmptyState, Pagination, SiteShell, StoryRow } from "@/components/site/shell";
 import { listPublished, requestOrigin, resolveSite } from "@/lib/site";
 
 type Props = { params: Promise<{ slug: string }>; searchParams: Promise<{ page?: string }> };
@@ -23,12 +23,14 @@ export default async function CategoryPage({ params, searchParams }: Props) {
   if (!category) notFound();
   const { items, page, pages } = await listPublished(site, { page: Number(rawPage) || 1, categoryId: category.id });
   return (
-    <SiteShell site={site}>
-      <h1 className="site-heading">{category.name}</h1>
-      {category.description && <p className="site-small" style={{ marginTop: "calc(var(--space-sm) * -1)", marginBottom: "var(--space-lg)" }}>{category.description}</p>}
+    <SiteShell site={site} current={category.slug}>
+      <header className="site-page-head">
+        <h1>{category.name}</h1>
+        {category.description && <p>{category.description}</p>}
+      </header>
       {items.length === 0
-        ? <EmptyState>Belum ada berita di kategori ini.</EmptyState>
-        : <div className="site-grid">{items.map((item) => <ArticleCard key={item.slug} item={item} />)}</div>}
+        ? <EmptyState>Belum ada berita di rubrik ini. Lihat berita lain di beranda.</EmptyState>
+        : <div className="site-rows">{items.map((item) => <StoryRow key={item.slug} item={item} />)}</div>}
       <Pagination page={page} pages={pages} hrefFor={(n) => (n > 1 ? `/kategori/${category.slug}?page=${n}` : `/kategori/${category.slug}`)} />
     </SiteShell>
   );

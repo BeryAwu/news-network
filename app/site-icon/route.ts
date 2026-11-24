@@ -1,7 +1,5 @@
 import { markSvg } from "@/lib/logo-mark";
 import { requestHostname, resolveSite } from "@/lib/site";
-import { themeInfo } from "@/lib/site-themes";
-import { NEWSROOM_COLOR } from "@/lib/newsroom-mark";
 import { newsroomIconSvg } from "@/lib/newsroom-mark";
 
 /** The tab icon of a media site: its logo mark with its first letter, in its own colour. Unknown hosts get the neutral Newsroom icon. */
@@ -10,7 +8,7 @@ export async function GET() {
   if (!(await requestHostname())) return new Response(newsroomIconSvg, { headers });
   try {
     const site = await resolveSite();
-    return new Response(markSvg(themeInfo(site.theme.template).mark, site.theme.primary || NEWSROOM_COLOR, site.media.displayName), { headers });
+    return new Response(markSvg(site.theme.primary, site.media.displayName), { headers });
   } catch {
     return new Response(newsroomIconSvg, { headers });
   }
