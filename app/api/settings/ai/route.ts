@@ -6,7 +6,7 @@ import { readAiKeyStatus } from "@/lib/ai-status";
 import { jsonError } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 
-const MAX_KEYS = 8;
+const MAX_KEYS = 30;
 const keyText = z.string().trim().min(20, "Kunci terlalu pendek. Salin seluruh kunci dari dashboard penyedia.").max(300, "Kunci terlalu panjang.").regex(/^\S+$/, "Kunci tidak boleh berisi spasi.");
 const modelText = z.string().trim().min(3).max(100).regex(/^[A-Za-z0-9._:/-]+$/, "Nama model hanya boleh berisi huruf, angka, titik, garis, titik dua, dan garis miring.");
 const baseUrlText = z.string().trim().url("Base URL harus berupa URL yang valid.").max(200).regex(/^https?:\/\//, "Base URL harus dimulai dengan http:// atau https://");
@@ -16,10 +16,9 @@ const providerSchema = z.object({ action: z.literal("provider"), provider: z.enu
 const idSchema = z.object({ action: z.enum(["remove", "primary", "reset"]), id: z.string().regex(/^[a-f0-9]{12}$/) });
 const keyModelSchema = z.object({ action: z.literal("keymodel"), id: z.string().regex(/^[a-f0-9]{12}$/), model: modelText });
 const checkSchema = z.object({ action: z.literal("check") });
-const freeModelsSchema = z.object({ action: z.literal("freemodels") });
 const bulkSchema = z.object({ action: z.literal("bulk"), apiKeys: z.array(keyText).min(1).max(50) });
 const modelsSchema = z.object({ action: z.literal("models"), baseUrl: baseUrlText.optional(), apiKey: keyText.optional() });
-const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, freeModelsSchema, bulkSchema, modelsSchema]);
+const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, bulkSchema, modelsSchema]);
 
 /** Owner-only. Keys are never returned, only their last four characters. */
 async function owner(request: Request, mutating: boolean) {
@@ -54,18 +53,10 @@ export async function POST(request: Request) {
       const allowed = input.apiKeys.slice(0, MAX_KEYS - total);
       const added = await addAiKeysBulk(user, allowed);
       await audit(user.id, "AI_KEYS_BULK_ADDED", "IntegrationSetting", "bulk", null, { added, total: total + added });
-      return Response.json({ status: await readAiKeyStatus(), added });
-    }
-
-    if (input.action === "freemodels") {
-      const key = saved.keys.find((k) => k.secret)?.secret || null;
-      if (!key) return Response.json({ error: "Tambah kunci API dulu sebelum mengambil daftar model gratis." }, { status: 400 });
-      const baseUrl = saved.baseUrl || OPENROUTER_BASE_URL;
-      const list = await listAiModels(key, baseUrl);
-      if (!list.ok) return Response.json({ error: list.reason }, { status: 422 });
-      await saveFreeModels(list.freeModels);
-      await audit(user.id, "AI_FREE_MODELS_REFRESHED", "IntegrationSetting", "ai.freeModels", null, { count: list.freeModels.length });
-      return Response.json({ status: await readAiKeyStatus(), freeCount: list.freeModels.length });
+      // Fill the free-model backup pool right away so rotation works without another click. Best effort.
+      const list = await listAiModels(allowed[0], saved.baseUrl || OPENROUTER_BASE_URL);
+      if (list.ok) await saveFreeModels(list.freeModels);
+      return Response.json({ status: await readAiKeyStatus(), added, models: list.ok ? list.models : undefined, freeModels: list.ok ? list.freeModels : undefined });
     }
 
     if (input.action === "check") {
@@ -82,7 +73,9 @@ export async function POST(request: Request) {
       const baseUrl = input.baseUrl || saved.baseUrl || OPENROUTER_BASE_URL;
       const list = await listAiModels(key, baseUrl);
       if (!list.ok) return Response.json({ error: list.reason }, { status: 422 });
-      return Response.json({ models: list.models, freeModels: list.freeModels });
+      // The catalogue of the active provider doubles as the automatic backup pool.
+      if (baseUrl === (saved.baseUrl || OPENROUTER_BASE_URL)) await saveFreeModels(list.freeModels);
+      return Response.json({ status: await readAiKeyStatus(), models: list.models, freeModels: list.freeModels });
     }
 
     if (input.action === "add") {

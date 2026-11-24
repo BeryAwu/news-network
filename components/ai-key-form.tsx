@@ -100,7 +100,12 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
     if (data) {
       setBulkKeys("");
       const added = (data as { added?: number }).added ?? 0;
-      setNotice({ tone: "success", text: `${added} kunci baru ditambahkan${added < keys.length ? `, ${keys.length - added} sudah ada sebelumnya` : ""}.` });
+      if (data.models) {
+        setCatalogue({ baseUrl: effectiveBaseUrl, models: data.models, freeIds: new Set(data.freeModels ?? []) });
+        setFreeOnly(true);
+      }
+      const freeText = data.freeModels ? ` ${data.freeModels.length} model gratis siap sebagai cadangan otomatis — pilih model utama di langkah 03.` : "";
+      setNotice({ tone: "success", text: `${added} kunci baru ditambahkan${added < keys.length ? `, ${keys.length - added} sudah ada sebelumnya` : ""}.${freeText}` });
     }
   }
 
@@ -119,7 +124,7 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
       const freeList: string[] = data.freeModels ?? [];
       setCatalogue({ baseUrl: effectiveBaseUrl, models: data.models, freeIds: new Set(freeList) });
       const freeCount = freeList.length;
-      setNotice({ tone: "success", text: `${data.models.length} model terbaca${freeCount ? ` · ${freeCount} gratis` : ""}.`, inModel: true });
+      setNotice({ tone: "success", text: `${data.models.length} model terbaca${freeCount ? ` · ${freeCount} gratis, dipakai otomatis kalau model utama lambat atau error` : ""}.`, inModel: true });
     }
   }
 
@@ -127,11 +132,6 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
     if (!model.trim()) { setNotice({ tone: "error", text: "Isi nama model dulu." }); return; }
     const data = await call("POST", { action: "model", model: model.trim() }, "model");
     if (data) { setModel(""); setNotice({ tone: "success", text: "Model disimpan." }); }
-  }
-
-  async function refreshFreeModels() {
-    const data = await call("POST", { action: "freemodels" }, "freemodels");
-    if (data) setNotice({ tone: "success", text: `${(data as { freeCount?: number }).freeCount ?? 0} model gratis tersimpan. Sistem akan otomatis rotasi saat model utama lambat atau penuh.` });
   }
 
   async function saveKeyModel(key: AiKeyView) {
@@ -290,13 +290,12 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
           )}
           <div className="actions">
             <button type="button" className="btn btn-primary" disabled={busy !== null || !candidate} onClick={saveModel}>{busy === "model" ? "Menyimpan…" : "Simpan model"}</button>
-            <button type="button" className="btn" disabled={busy !== null} onClick={refreshFreeModels}>{busy === "freemodels" ? "Mengambil…" : `Perbarui model gratis${status.freeModelCount > 0 ? ` (${status.freeModelCount})` : ""}`}</button>
           </div>
           <span className="field-help">Gunakan nama persis dari katalog penyedia, termasuk prefix — misal <code>ngodeai/glm-5.3-flash</code>.</span>
         </div>
       </details>
 
-      {notice && (
+      {notice && !notice.inModel && (
         <div className={notice.tone === "success" ? "notice notice-success" : "notice notice-error"} role={notice.tone === "success" ? "status" : "alert"}>
           {notice.tone === "success" ? <CircleCheck size={20} aria-hidden="true" /> : <CircleAlert size={20} aria-hidden="true" />}
           <span>{notice.text}</span>

@@ -34,14 +34,14 @@ async function resolveAi(): Promise<AiCredentials> {
   if (test) return { configured: true, mode: "test adapter", provider: "test", model: "deterministic-test-v1", baseUrl: null, keySource: null, candidates: [], fallbackModel: "", freeModels: [] };
   const saved = await readAiSettings();
   const envProvider = process.env.AI_PROVIDER?.trim().toLowerCase() || "";
-  const allUsable = saved.keys.filter((k) => k.secret && k.status !== "rejected");
-  const primary = await roundRobinKey(allUsable);
+  // Healthy keys take turns per request; keys still cooling down stay at the back as a last resort.
+  const ordered = attemptOrder(saved.keys);
+  const now = new Date();
+  const healthy = ordered.filter((k) => k.status === "ok" || !k.cooldownUntil || k.cooldownUntil <= now);
+  const first = (await roundRobinKey(healthy)) ?? ordered[0] ?? null;
   const provider = saved.provider || "openrouter";
   const baseUrl = saved.baseUrl || (provider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1");
-  const dashboard: AiCandidate[] = primary
-    ? [{ id: primary.id, apiKey: primary.secret as string, provider, baseUrl, model: primary.model },
-       ...allUsable.filter((k) => k.id !== primary.id).map((k): AiCandidate => ({ id: k.id, apiKey: k.secret as string, provider, baseUrl, model: k.model }))]
-    : [];
+  const dashboard = (first ? [first, ...ordered.filter((k) => k.id !== first.id)] : []).map((k): AiCandidate => ({ id: k.id, apiKey: k.secret as string, provider, baseUrl, model: k.model }));
   const supported = envProvider === "openai" || envProvider === "openai-compatible" || envProvider === "openrouter";
   const envCandidates: AiCandidate[] = supported && process.env.AI_API_KEY ? [{ id: null, apiKey: process.env.AI_API_KEY, provider: envProvider, baseUrl: process.env.AI_BASE_URL || (envProvider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1"), model: null }] : [];
   const candidates = [...dashboard, ...envCandidates];
@@ -105,7 +105,8 @@ export async function generateDraft(brief: AiBrief, media: AiMedia, instruction?
   if (!config.configured || !config.provider) throw new IntegrationNotConfigured("AI provider");
   if (config.provider === "test") return draftWith(config, null, brief, media, instruction, currentArticle, guidance);
   let failure: unknown = null;
-  for (const candidate of config.candidates) {
+  // Each key may try several models; cap keys so one request never waits for the whole pool.
+  for (const candidate of config.candidates.slice(0, MAX_KEY_ATTEMPTS)) {
     try {
       const result = await draftWith(config, candidate, brief, media, instruction, currentArticle, guidance);
       if (candidate.id) await recordKeyOutcome(candidate.id, { ok: true });
@@ -120,6 +121,40 @@ export async function generateDraft(brief: AiBrief, media: AiMedia, instruction?
   }
   throw failure;
 }
+/** A slow free model is abandoned after this long and the next model is tried. */
+const MODEL_ATTEMPT_TIMEOUT_MS = 60000;
+const MAX_MODEL_ATTEMPTS = 4;
+const MAX_KEY_ATTEMPTS = 3;
+const DRAFT_STRING_FIELDS = ["title", "excerpt", "body", "suggestedCategory", "seoTitle", "metaDescription", "slugSuggestion", "imageBrief"] as const;
+const OPTIONAL_FIELD_LIMITS = { suggestedCategory: 100, seoTitle: 180, metaDescription: 300, slugSuggestion: 140, imageBrief: 1000 };
+
+/** Some models wrap JSON in a ```json fence even with response_format set. */
+function stripJsonFence(content: string) {
+  return content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+}
+
+/** Models often send null or omit optional fields; coerce them to the empty values the schema expects. Required text is still validated. */
+export function normalizeDraftOutput(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const out: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+  for (const field of DRAFT_STRING_FIELDS) if (out[field] === null || out[field] === undefined) out[field] = "";
+  // Metadata fields are safe to cut to their limit; title/excerpt/body are left for the schema to judge.
+  for (const [field, max] of Object.entries(OPTIONAL_FIELD_LIMITS)) if (typeof out[field] === "string") out[field] = (out[field] as string).slice(0, max);
+  const strings = (value: unknown, maxItems: number, maxLength: number) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "").slice(0, maxItems).map((item) => item.slice(0, maxLength)) : [];
+  out.tags = strings(out.tags, 12, 40);
+  out.uncertainties = strings(out.uncertainties, 50, 500);
+  out.claimsUsed = Array.isArray(out.claimsUsed)
+    ? (out.claimsUsed as unknown[]).flatMap((claim) => {
+        if (typeof claim === "string") return claim.trim() ? [{ claimText: claim, sourceFactIds: [] }] : [];
+        if (!claim || typeof claim !== "object") return [];
+        const { claimText, sourceFactIds } = claim as { claimText?: unknown; sourceFactIds?: unknown };
+        if (typeof claimText !== "string" || !claimText.trim()) return [];
+        return [{ claimText: claimText.slice(0, 500), sourceFactIds: Array.isArray(sourceFactIds) ? sourceFactIds.filter((id): id is string => typeof id === "string").slice(0, 10) : [] }];
+      }).slice(0, 50)
+    : [];
+  return out;
+}
+
 async function draftWith(config: AiCredentials, candidate: AiCandidate | null, brief: AiBrief, media: AiMedia, instruction?: string, currentArticle?: ArticleRevisionContext, guidance?: string) {
   const provider = candidate?.provider ?? config.provider as string;
   const input = promptInput(brief, media, instruction, currentArticle, guidance);
@@ -134,37 +169,51 @@ async function draftWith(config: AiCredentials, candidate: AiCandidate | null, b
   const modelQueue = [primaryModel, ...freePool];
   const firstAttemptMessage = `${JSON.stringify(input)}\n\nReturn JSON with title, excerpt, body, suggestedCategory, tags, seoTitle, metaDescription, slugSuggestion, imageBrief, claimsUsed as {claimText,sourceFactIds} objects, and uncertainties.`;
   let likelyError: string | null = null;
+  let lastStatus: number | null = null;
+  /** Validation problems from the previous answer, sent back so the model can correct itself. */
+  let feedback: string | null = null;
+  const corrected = new Set<string>();
+  // A model that answered but broke the format gets one corrective retry before the next model is tried.
+  const correctOrMoveOn = (model: string, mi: number, problem: string) => {
+    likelyError = problem;
+    feedback = problem;
+    if (!corrected.has(model)) { corrected.add(model); modelQueue.splice(mi + 1, 0, model); }
+  };
   const lastError = await (async () => {
-    for (let mi = 0; mi < Math.min(modelQueue.length, 6); mi += 1) {
+    for (let mi = 0; mi < Math.min(modelQueue.length, MAX_MODEL_ATTEMPTS); mi += 1) {
       const attemptModel = modelQueue[mi];
       let response: Response;
       try {
-        response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${candidate?.apiKey}`, "content-type": "application/json", ...(provider === "openrouter" ? { "HTTP-Referer": process.env.ADMIN_BASE_URL || "http://localhost:3000", "X-OpenRouter-Title": "News Network Management System" } : {}) }, signal: AbortSignal.timeout(90000), body: JSON.stringify({ model: attemptModel, temperature: 0.4, max_tokens: 3000, response_format: { type: "json_object" }, ...(provider === "openrouter" ? { provider: { require_parameters: true, data_collection: "deny" } } : {}), messages: [{ role: "system", content: input.requirements }, { role: "user", content: mi === 0 ? firstAttemptMessage : likelyError ? `${firstAttemptMessage}\n\nYour previous response failed validation with these errors, and must be fixed:\n${JSON.stringify({ errors: likelyError }, null, 2)}` : firstAttemptMessage }] }) });
+        response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${candidate?.apiKey}`, "content-type": "application/json", ...(provider === "openrouter" ? { "HTTP-Referer": process.env.ADMIN_BASE_URL || "http://localhost:3000", "X-OpenRouter-Title": "News Network Management System" } : {}) }, signal: AbortSignal.timeout(MODEL_ATTEMPT_TIMEOUT_MS), body: JSON.stringify({ model: attemptModel, temperature: 0.4, max_tokens: 3000, response_format: { type: "json_object" }, ...(provider === "openrouter" ? { provider: { require_parameters: true, data_collection: "deny" } } : {}), messages: [{ role: "system", content: input.requirements }, { role: "user", content: feedback ? `${firstAttemptMessage}\n\nYour previous response failed validation with these errors, and must be fixed:\n${JSON.stringify({ errors: feedback }, null, 2)}` : firstAttemptMessage }] }) });
       } catch {
         // Network error or timeout — try next free model
-        likelyError = `Model ${attemptModel} timed out or unreachable.`;
+        likelyError = `Model ${attemptModel}: timeout or unreachable.`;
         continue;
       }
-      // 524/429/503 = slow/busy — try next model; 401/402/403/404 = key/model issue — throw
-      if (response.status === 524 || response.status === 429 || response.status === 503) { likelyError = `Model ${attemptModel} returned ${response.status}.`; continue; }
-      if (!response.ok) throw new AiProviderError(response.status, attemptModel);
-      const result = await response.json() as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+      // 401/402/403 are about the key: stop so generateDraft moves to the next key. Anything else is this model being slow, busy, or unavailable: try the next model.
+      if ([401, 402, 403].includes(response.status)) throw new AiProviderError(response.status, attemptModel);
+      if (!response.ok) { lastStatus = response.status; likelyError = `Model ${attemptModel} returned ${response.status}.`; continue; }
+      let result: { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+      // The timeout also covers reading the body: a model that starts answering but writes too slowly is abandoned here.
+      try { result = await response.json(); } catch { likelyError = `Model ${attemptModel}: timeout or unreachable.`; continue; }
       const content = result.choices?.[0]?.message?.content;
       if (!content) { likelyError = "AI provider returned no structured article."; continue; }
       let parsed: unknown;
-      try { parsed = JSON.parse(content); } catch { likelyError = "The provider did not return valid JSON."; continue; }
+      try { parsed = normalizeDraftOutput(JSON.parse(stripJsonFence(content))); } catch { correctOrMoveOn(attemptModel, mi, "The provider did not return valid JSON."); continue; }
       try {
         const draft = validateDraftEvidence(articleDraftSchema.parse(parsed), brief.facts, brief.references);
         return { draft, provider, model: attemptModel, promptVersion: PROMPT_VERSION, latencyMs: Date.now() - started, inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"), inputTokens: result.usage?.prompt_tokens ?? null, outputTokens: result.usage?.completion_tokens ?? null, changeSummary: instruction ? `AI revision requested: ${instruction}` : "Initial AI article draft." };
       } catch (error) {
         const retryable = error instanceof DraftEvidenceValidationError || (error instanceof Error && (error.message.includes("Too small") || error.message.includes("Invalid input")));
         if (retryable) {
-          likelyError = error instanceof DraftEvidenceValidationError ? `${error.message} Fix every problem listed above before resubmitting.` : error.message;
+          correctOrMoveOn(attemptModel, mi, error instanceof DraftEvidenceValidationError ? `${error.message} Fix every problem listed above before resubmitting.` : error.message);
           continue;
         }
         throw error;
       }
     }
+    // Every model answered with an HTTP error: report it as a provider error so 429 still cools the key down and the next key is tried.
+    if (lastStatus !== null && /returned \d{3}\.$/.test(likelyError ?? "")) throw new AiProviderError(lastStatus, modelQueue[0]);
     throw new Error(likelyError ?? "AI provider returned an invalid structured article after all model attempts.");
   })();
   return lastError;

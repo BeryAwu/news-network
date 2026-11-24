@@ -3,9 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // The dashboard key lives in the database; tests control it here instead of touching one.
 type FakeKey = { id: string; secret: string | null; status: "ok" | "cooldown" | "rejected"; cooldownUntil: Date | null };
 const saved = vi.hoisted(() => ({ keys: [] as FakeKey[], model: null as string | null, outcomes: [] as { id: string; outcome: unknown }[] }));
-vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiSettings: async () => ({ keys: saved.keys.map((key, position) => ({ label: "", hint: "", lastError: "", lastUsedAt: null, position, addedByName: "", ...key })), model: saved.model, provider: null, baseUrl: null }), recordKeyOutcome: async (id: string, outcome: unknown) => { saved.outcomes.push({ id, outcome }); } }));
+vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiSettings: async () => ({ keys: saved.keys.map((key, position) => ({ label: "", hint: "", lastError: "", lastUsedAt: null, position, addedByName: "", ...key })), model: saved.model, provider: null, baseUrl: null, freeModels: [] }), roundRobinKey: async (keys: { secret: string | null; status: string }[]) => keys.find((k) => k.secret && k.status !== "rejected") ?? null, recordKeyOutcome: async (id: string, outcome: unknown) => { saved.outcomes.push({ id, outcome }); } }));
 const key = (id: string, secret: string | null, extra: Partial<FakeKey> = {}): FakeKey => ({ id, secret, status: "ok", cooldownUntil: null, ...extra });
-import { aiConfiguration, articleDraftSchema, generateDraft, plainAiFailure, validateDraftEvidence } from "../lib/ai";
+import { aiConfiguration, articleDraftSchema, generateDraft, normalizeDraftOutput, plainAiFailure, validateDraftEvidence } from "../lib/ai";
 import { checkAiKey, listAiModels, OPENROUTER_BASE_URL } from "../lib/ai-settings";
 import { parsePage, robotsAllows } from "../lib/ingest";
 import { createEditorialEvidenceSnapshot } from "../lib/editorial-evidence";
@@ -45,6 +45,14 @@ describe("structured editorial output validation", () => {
     expect(() => validateDraftEvidence(draft, [{ ...fact, supportStatus: "CONFLICTED" }], references)).toThrow(/marked CONFLICTED/);
     expect(() => validateDraftEvidence(draft, [fact], [])).toThrow(/not fetched successfully/);
     expect(() => validateDraftEvidence(draft, [], references)).toThrow(/was not supplied/);
+  });
+  it("accepts a model reply with null or oversized metadata once normalized, but still rejects a missing body", () => {
+    const reply = { title: "Banner Berry jadi syarat seminar KP", excerpt: "Ringkasan singkat untuk pembaca kampus.", body: "Isi berita yang cukup panjang untuk lolos validasi. ".repeat(4), suggestedCategory: null, tags: null, seoTitle: "x".repeat(400), metaDescription: null, slugSuggestion: null, imageBrief: null, claimsUsed: ["Konteks dari narasi."], uncertainties: null };
+    const draft = articleDraftSchema.parse(normalizeDraftOutput(reply));
+    expect(draft.suggestedCategory).toBe("");
+    expect(draft.seoTitle).toHaveLength(180);
+    expect(draft.claimsUsed).toEqual([{ claimText: "Konteks dari narasi.", sourceFactIds: [] }]);
+    expect(() => articleDraftSchema.parse(normalizeDraftOutput({ ...reply, body: null }))).toThrow();
   });
   it("rejects claims whose evidence links have no source-fact identifier", () => {
     expect(() => articleDraftSchema.parse({ title: "Pembaruan kebijakan energi nasional", excerpt: "Ringkasan informasi yang cukup panjang untuk editor.", body: "Isi artikel berdasarkan narasi yang diberikan. ".repeat(4), suggestedCategory: "Energi", tags: [], seoTitle: "Pembaruan", metaDescription: "Ringkasan", slugSuggestion: "energi", imageBrief: "Ilustrasi editorial", claimsUsed: [{ claimText: "Fakta diklaim tetapi tidak ada evidence ID." }], uncertainties: [] })).toThrow();
