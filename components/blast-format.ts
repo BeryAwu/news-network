@@ -1,6 +1,21 @@
 import type { BlastStatus, PublicationState } from "@/lib/blast-types";
 import { asFailure, failure, readBody } from "@/components/plain-errors";
 
+/** Plain editorial status for older articles that predate the shared-content blast flow. */
+export const legacyStatusInfo: Record<string, { label: string; badge: string }> = {
+  DRAFT: { label: "Draft", badge: "" },
+  GENERATING: { label: "Sedang dibuat", badge: "badge-yellow" },
+  NEEDS_REVIEW: { label: "Perlu ditinjau", badge: "badge-yellow" },
+  IN_REVISION: { label: "Dalam revisi", badge: "badge-blue" },
+  APPROVED: { label: "Siap terbit", badge: "badge-green" },
+  REJECTED: { label: "Ditolak", badge: "badge-red" },
+  SCHEDULED: { label: "Terjadwal", badge: "badge-blue" },
+  PUBLISHING: { label: "Sedang diterbitkan", badge: "badge-yellow" },
+  PUBLISHED: { label: "Sudah terbit", badge: "badge-green" },
+  PUBLISH_FAILED: { label: "Gagal terbit", badge: "badge-red" },
+  ARCHIVED: { label: "Diarsipkan", badge: "" },
+};
+
 /** Plain words and badge colour for each state of a blast. */
 export const statusInfo: Record<BlastStatus, { label: string; badge: string }> = {
   GENERATING: { label: "Sedang dibuat", badge: "badge-yellow" },

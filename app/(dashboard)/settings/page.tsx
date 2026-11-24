@@ -44,55 +44,55 @@ export default async function SettingsPage() {
   const redisConfigured = Boolean(process.env.REDIS_URL);
 
   const aiService: Service = ai.mode === "test adapter"
-    ? { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "yellow", label: "Mode uji", state: "AI berjalan dalam mode uji. Drafnya berisi teks contoh, bukan tulisan AI sungguhan, jadi jangan diterbitkan.", technical: "AI_TEST_ADAPTER" }
+    ? { key: "ai", title: "AI", purpose: "Menulis draf berita", tone: "yellow", label: "Mode uji", state: "AI berjalan dalam mode uji. Drafnya berisi teks contoh, bukan tulisan AI sungguhan.", technical: "AI_TEST_ADAPTER" }
     : ai.mode === "unsupported provider"
-      ? { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "red", label: "Penyedia tidak didukung", state: "Penyedia AI yang dipilih belum bisa dipakai. Minta teknisi server memilih openai, openai-compatible, atau openrouter, lalu mulai ulang aplikasi.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" }
+      ? { key: "ai", title: "AI", purpose: "Menulis draf berita", tone: "red", label: "Penyedia tidak didukung", state: "Penyedia AI yang dipilih belum bisa dipakai. Minta teknisi server memilih openai, openai-compatible, atau openrouter.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" }
       : ai.configured
-        ? { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "green", label: "Sudah disetel", state: "Kunci AI sudah terisi. Draf masih bisa gagal kalau kredit habis atau jaringan putus. Kalau kredit habis, pemilik bisa mengganti kunci di kartu Kunci AI di bawah tanpa menyentuh server.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" }
-        : { key: "ai", title: "AI", purpose: "Menulis draf berita dari topik yang Anda berikan.", tone: "red", label: "Belum disetel", state: "Belum ada kunci AI, jadi draf belum bisa dibuat. Pemilik bisa menempel kunci OpenRouter di kartu Kunci AI di bawah.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY" };
-  aiService.extra = `Penyedia: ${ai.provider || "belum dipilih"}. Model: ${ai.model || "belum dipilih"}. Sumber kunci: ${ai.keySource === "dashboard" ? "dashboard" : ai.keySource === "env" ? "server" : "belum ada"}.${ai.provider === "openrouter" ? " Untuk menekan biaya, pilih model qwen/qwen3-32b di kartu Kunci AI. Permintaan diarahkan ke penyedia yang tidak mengumpulkan data menurut kebijakan OpenRouter. Itu bukan jaminan, jadi jangan menulis data pribadi atau rahasia redaksi di topik berita." : ""}`;
+        ? { key: "ai", title: "AI", purpose: "Menulis draf berita", tone: "green", label: "Siap", state: "", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY, AI_BASE_URL" }
+        : { key: "ai", title: "AI", purpose: "Menulis draf berita", tone: "red", label: "Belum disetel", state: "Belum ada kunci AI. Klik Kelola kunci AI untuk menambah.", technical: "AI_PROVIDER, AI_MODEL, AI_API_KEY, AI_BASE_URL" };
+  aiService.extra = ai.provider && ai.model ? `${ai.provider} · ${ai.model}` : undefined;
 
   const services: Service[] = [
     databaseReady
-      ? { key: "database", title: "Database", purpose: "Menyimpan media, naskah, akun tim, dan riwayat kerja.", tone: "green", label: "Terhubung", state: "Aplikasi berhasil membaca database barusan.", technical: "DATABASE_URL" }
-      : { key: "database", title: "Database", purpose: "Menyimpan media, naskah, akun tim, dan riwayat kerja.", tone: "red", label: "Tidak terhubung", state: "Aplikasi tidak bisa menjangkau database, jadi halaman lain bisa gagal dimuat. Minta teknisi server memeriksa alamat database dan memastikan database menyala.", technical: "DATABASE_URL" },
+      ? { key: "database", title: "Database", purpose: "Menyimpan berita dan pengaturan", tone: "green", label: "Terhubung", state: "", technical: "DATABASE_URL" }
+      : { key: "database", title: "Database", purpose: "Menyimpan berita dan pengaturan", tone: "red", label: "Tidak terhubung", state: "Database tidak terjangkau. Minta teknisi periksa koneksi.", technical: "DATABASE_URL" },
     cloudConfigured
-      ? { key: "images", title: "Penyimpanan gambar (Cloudinary)", purpose: "Menyimpan gambar naskah dan logo media, lengkap dengan catatan hak pakainya.", tone: "green", label: "Sudah disetel", state: "Ketiga kunci Cloudinary sudah terisi. Halaman ini belum menguji unggahan, jadi coba unggah satu gambar untuk memastikan.", technical: "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET" }
-      : { key: "images", title: "Penyimpanan gambar (Cloudinary)", purpose: "Menyimpan gambar naskah dan logo media, lengkap dengan catatan hak pakainya.", tone: "yellow", label: "Belum disetel", state: "Gambar belum bisa diunggah. Minta teknisi server mengisi tiga kunci Cloudinary, lalu mulai ulang aplikasi. Naskah tanpa gambar tetap bisa terbit.", technical: "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET" },
+      ? { key: "images", title: "Cloudinary", purpose: "Menyimpan gambar dan logo", tone: "green", label: "Siap", state: "", technical: "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET" }
+      : { key: "images", title: "Cloudinary", purpose: "Menyimpan gambar dan logo", tone: "yellow", label: "Belum disetel", state: "Gambar belum bisa diunggah. Minta teknisi isi kunci Cloudinary.", technical: "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET" },
     aiService,
     redisConfigured
-      ? { key: "schedule", title: "Penjadwalan otomatis (Redis)", purpose: "Menerbitkan naskah pada jam yang Anda pilih dan mengulang terbit yang gagal.", tone: "green", label: "Sudah disetel", state: "Alamat Redis sudah terisi. Halaman ini tidak bisa memeriksa proses penjadwalan (worker), jadi minta teknisi memastikan proses itu berjalan sebelum Anda mengandalkan jadwal.", technical: "REDIS_URL (antrean BullMQ)" }
-      : { key: "schedule", title: "Penjadwalan otomatis (Redis)", purpose: "Menerbitkan naskah pada jam yang Anda pilih dan mengulang terbit yang gagal.", tone: "yellow", label: "Belum aktif", state: "Terbit sekarang tetap jalan. Jadwal yang Anda simpan belum berjalan sendiri. Minta teknisi server menyiapkan Redis dan proses penjadwalan, lalu mulai ulang aplikasi.", technical: "REDIS_URL (antrean BullMQ)" },
+      ? { key: "schedule", title: "Penjadwalan (Redis)", purpose: "Terbit otomatis sesuai jadwal", tone: "green", label: "Aktif", state: "", technical: "REDIS_URL" }
+      : { key: "schedule", title: "Penjadwalan (Redis)", purpose: "Terbit otomatis sesuai jadwal", tone: "yellow", label: "Belum aktif", state: "Terbit sekarang tetap jalan. Jadwal belum otomatis.", technical: "REDIS_URL" },
   ];
 
   const ready = services.filter((service) => service.tone === "green").length;
   const needsAttention = services.length - ready;
 
   return <>
-    <PageHeading title="Koneksi layanan" subtitle="Cek apakah layanan di balik aplikasi sudah tersambung. Yang hijau siap, yang kuning masih bisa dipakai sebagian, yang merah menghambat pekerjaan." />
+    <PageHeading title="Koneksi layanan" subtitle="Cek status layanan yang dipakai aplikasi." />
     <div className={needsAttention ? "notice notice-warn" : "notice notice-success"} role="status">
       {needsAttention
-        ? `${needsAttention} dari ${services.length} layanan perlu perhatian. Kartu di bawah menjelaskan apa yang harus dibereskan.`
-        : `Semua ${services.length} layanan sudah siap dipakai.`}
+        ? `${needsAttention} dari ${services.length} layanan perlu perhatian.`
+        : `Semua ${services.length} layanan siap.`}
     </div>
-    <div className="grid grid-2">
-      {services.map((service) => {
-        const Icon = toneIcon[service.tone];
-        return <section className="card service-card" key={service.key} aria-labelledby={`service-${service.key}`}>
-          <div className="service-head">
-            <h2 id={`service-${service.key}`}>{service.title}</h2>
-            <span className={toneBadge[service.tone]}><Icon size={16} aria-hidden="true" />{service.label}</span>
-          </div>
-          <p className="service-purpose">{service.purpose}</p>
-          <p className={service.tone === "green" ? "service-state" : service.tone === "yellow" ? "service-state notice notice-warn" : "service-state notice notice-error"}>{service.state}</p>
-          <p className="tech-note">Nama teknis: <code>{service.technical}</code></p>
-          {service.extra && <p className="tech-note">{service.extra}</p>}
-        </section>;
-      })}
-    </div>
-    {isOwner
-      ? <AiKeyForm initial={aiKey} />
-      : <p className="muted">Hanya pemilik yang bisa mengganti kunci AI dari halaman ini.</p>}
-    <p className="muted">Kunci database, Cloudinary, dan Redis dipasang di server oleh teknisi Anda. Halaman ini tidak pernah menampilkan kunci apa pun.</p>
+    <section className="service-monitor" aria-labelledby="service-monitor-title">
+      <div className="service-monitor-head">
+        <div><h2 id="service-monitor-title">Status layanan</h2><p className="muted">Ringkasan koneksi yang memengaruhi kerja redaksi.</p></div>
+        <span className="service-count">{ready}/{services.length} siap</span>
+      </div>
+      <div className="service-list">
+        {services.map((service) => {
+          const Icon = toneIcon[service.tone];
+          return <div className={`service-row service-row-${service.tone}`} key={service.key}>
+            <Icon className="service-row-icon" size={21} aria-hidden="true" />
+            <div className="service-row-main"><strong>{service.title}</strong><span>{service.purpose}</span>{service.extra && <small>{service.extra}</small>}</div>
+            <span className={toneBadge[service.tone]}>{service.label}</span>
+            <details className="service-row-details"><summary>Detail</summary><div><p>{service.state || "Tidak ada tindakan yang perlu dilakukan."}</p><code>{service.technical}</code></div></details>
+          </div>;
+        })}
+      </div>
+    </section>
+    {isOwner && <AiKeyForm initial={aiKey} />}
+    <p className="muted">Kunci database, Cloudinary, dan Redis dipasang di server. Halaman ini tidak menampilkan kunci rahasia.</p>
   </>;
 }

@@ -1,19 +1,22 @@
 import { z } from "zod";
 import { audit, requireRole, requireSameOrigin } from "@/lib/auth";
-import { aiConfiguration, currentOpenRouterKey } from "@/lib/ai";
-import { addAiKey, checkOpenRouterKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, makePrimary, readAiSettings, removeAiKey, resetAiKey, saveAiModel } from "@/lib/ai-settings";
+import { aiConfiguration, currentAiKey } from "@/lib/ai";
+import { addAiKey, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiModel, saveAiProvider } from "@/lib/ai-settings";
 import { readAiKeyStatus } from "@/lib/ai-status";
 import { jsonError } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 
 const MAX_KEYS = 8;
-const keyText = z.string().trim().min(20, "Kunci terlalu pendek. Salin seluruh kunci dari OpenRouter.").max(300, "Kunci terlalu panjang.").regex(/^\S+$/, "Kunci tidak boleh berisi spasi.");
+const keyText = z.string().trim().min(20, "Kunci terlalu pendek. Salin seluruh kunci dari dashboard penyedia.").max(300, "Kunci terlalu panjang.").regex(/^\S+$/, "Kunci tidak boleh berisi spasi.");
 const modelText = z.string().trim().min(3).max(100).regex(/^[A-Za-z0-9._:/-]+$/, "Nama model hanya boleh berisi huruf, angka, titik, garis, titik dua, dan garis miring.");
-const addSchema = z.object({ action: z.literal("add"), apiKey: keyText, label: z.string().trim().max(40).optional() });
+const baseUrlText = z.string().trim().url("Base URL harus berupa URL yang valid.").max(200).regex(/^https?:\/\//, "Base URL harus dimulai dengan http:// atau https://");
+const addSchema = z.object({ action: z.literal("add"), apiKey: keyText, label: z.string().trim().max(40).optional(), baseUrl: baseUrlText.optional(), model: modelText.optional() });
 const modelSchema = z.object({ action: z.literal("model"), model: modelText });
+const providerSchema = z.object({ action: z.literal("provider"), provider: z.enum(["openrouter", "openai-compatible", "openai"]), baseUrl: baseUrlText });
 const idSchema = z.object({ action: z.enum(["remove", "primary", "reset"]), id: z.string().regex(/^[a-f0-9]{12}$/) });
 const checkSchema = z.object({ action: z.literal("check") });
-const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, idSchema, checkSchema]);
+const modelsSchema = z.object({ action: z.literal("models"), baseUrl: baseUrlText.optional(), apiKey: keyText.optional() });
+const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, checkSchema, modelsSchema]);
 
 /** Owner-only. Keys are never returned, only their last four characters. */
 async function owner(request: Request, mutating: boolean) {
@@ -43,18 +46,29 @@ export async function POST(request: Request) {
     const saved = await readAiSettings();
 
     if (input.action === "check") {
-      const current = await currentOpenRouterKey();
-      if (!current) return Response.json({ error: "Belum ada kunci OpenRouter yang terpasang." }, { status: 409 });
-      const check = await checkOpenRouterKey(current.apiKey, current.model);
+      const current = await currentAiKey();
+      if (!current) return Response.json({ error: "Belum ada kunci AI yang terpasang." }, { status: 409 });
+      const check = await checkAiKey(current.apiKey, current.model, current.baseUrl);
       if (!check.ok) return Response.json({ error: check.reason }, { status: 422 });
       return Response.json({ status: await readAiKeyStatus(), check: checkInfo(check) });
+    }
+
+    if (input.action === "models") {
+      const key = input.apiKey?.trim() || saved.keys.find((row) => row.secret)?.secret || null;
+      if (!key) return Response.json({ error: "Tempel kunci API dulu, atau simpan satu kunci supaya daftar model bisa dibaca." }, { status: 400 });
+      const baseUrl = input.baseUrl || saved.baseUrl || OPENROUTER_BASE_URL;
+      const list = await listAiModels(key, baseUrl);
+      if (!list.ok) return Response.json({ error: list.reason }, { status: 422 });
+      return Response.json({ models: list.models, freeModels: list.freeModels });
     }
 
     if (input.action === "add") {
       if (saved.keys.length >= MAX_KEYS) return Response.json({ error: `Maksimal ${MAX_KEYS} kunci. Hapus yang tidak dipakai dulu.` }, { status: 400 });
       if (saved.keys.some((key) => key.secret === input.apiKey)) return Response.json({ error: "Kunci ini sudah ada di daftar." }, { status: 409 });
       const config = await aiConfiguration();
-      const check = await checkOpenRouterKey(input.apiKey, saved.model ?? (config.provider === "openrouter" ? config.model : null) ?? DEFAULT_OPENROUTER_MODEL);
+      const baseUrl = input.baseUrl || saved.baseUrl || config.baseUrl || OPENROUTER_BASE_URL;
+      const model = input.model || saved.model || config.model || DEFAULT_OPENROUTER_MODEL;
+      const check = await checkAiKey(input.apiKey, model, baseUrl);
       if (!check.ok) return Response.json({ error: check.reason }, { status: 422 });
       const id = await addAiKey(user, input);
       const after = await readAiSettings();
@@ -63,11 +77,16 @@ export async function POST(request: Request) {
       return Response.json({ status: await readAiKeyStatus(), check: checkInfo(check) });
     }
 
+    if (input.action === "provider") {
+      await saveAiProvider(user, input.provider, input.baseUrl);
+      await audit(user.id, "AI_PROVIDER_CHANGED", "IntegrationSetting", "ai.provider", null, { provider: input.provider, baseUrl: input.baseUrl });
+      return Response.json({ status: await readAiKeyStatus() });
+    }
+
     if (input.action === "model") {
-      const first = saved.keys.find((key) => key.secret) ;
-      const current = first?.secret ? { apiKey: first.secret } : await currentOpenRouterKey();
-      if (!current) return Response.json({ error: "Pasang kunci OpenRouter dulu sebelum mengganti model." }, { status: 400 });
-      const check = await checkOpenRouterKey(current.apiKey, input.model);
+      const current = await currentAiKey();
+      if (!current) return Response.json({ error: "Pasang kunci AI dulu sebelum mengganti model." }, { status: 400 });
+      const check = await checkAiKey(current.apiKey, input.model, current.baseUrl);
       if (!check.ok) return Response.json({ error: check.reason }, { status: 422 });
       await saveAiModel(user, input.model);
       await audit(user.id, "AI_MODEL_CHANGED", "IntegrationSetting", "ai.model", null, { model: input.model });

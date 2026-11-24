@@ -4,6 +4,32 @@
   .bl-back { justify-self: start; }
   .bl-meta { display: flex; align-items: center; gap: var(--app-s2) var(--app-s3); flex-wrap: wrap; color: var(--app-muted); font-size: var(--app-text-sm); }
 
+  /* View switcher — a plain pair of tabs, not a segmented-control cliché */
+  .bl-head-actions { display: flex; align-items: center; gap: var(--app-s3); flex-wrap: wrap; }
+  .bl-view-switch { display: flex; gap: var(--app-s2); }
+  .bl-view-switch a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--app-s3); border: 1px solid transparent; border-radius: var(--app-radius-sm); color: var(--app-muted); font-size: var(--app-text-sm); font-weight: 700; text-decoration: none; }
+  .bl-view-switch a:hover { background: var(--app-surface-2); color: var(--app-ink); }
+  .bl-view-switch a.is-active { background: var(--app-surface); border-color: var(--app-line-strong); color: var(--app-ink); box-shadow: var(--app-shadow); }
+  .bl-view-switch a:focus-visible { outline: 3px solid var(--app-focus); outline-offset: 2px; }
+
+  /* Ledger variant — a work sheet for scanning a queue, not a stack of cards */
+  .bl-ledger-wrap { max-width: 100%; }
+  .bl-ledger { table-layout: fixed; }
+  .bl-ledger th:first-child { width: 4.5rem; }
+  .bl-ledger th:nth-child(3) { width: 12rem; }
+  .bl-ledger th:nth-child(4) { width: 14rem; }
+  .bl-ledger th:last-child { width: 6rem; }
+  .bl-ledger td, .bl-ledger th { vertical-align: middle; }
+  /* Row headers are article titles, not column labels: let them wrap and blend with the sheet. */
+  .bl-ledger tbody th { background: transparent; color: var(--app-ink); font-size: var(--app-text-md); font-weight: 400; white-space: normal; }
+  .bl-ledger-no { color: var(--app-muted); font-size: var(--app-text-sm); font-variant-numeric: tabular-nums; }
+  .bl-ledger-title a { color: var(--app-ink); font-size: var(--app-text-md); font-weight: 700; text-decoration: none; }
+  .bl-ledger-title a:hover { color: var(--app-link); text-decoration: underline; }
+  .bl-ledger-author { display: block; margin-top: 2px; color: var(--app-muted); font-size: var(--app-text-sm); font-weight: 400; }
+  .bl-ledger-note { display: block; margin-top: 4px; color: var(--app-danger); font-size: var(--app-text-xs); }
+  .bl-ledger-when { color: var(--app-muted); font-size: var(--app-text-sm); }
+  .bl-ledger-open { text-align: right; }
+
   /* List */
   .bl-list { display: grid; gap: var(--app-s4); list-style: none; margin: 0; padding: 0; }
   .bl-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--app-s4); align-items: center; }
@@ -51,6 +77,11 @@
   .bl-copy { display: grid; gap: var(--app-s3); }
   .bl-copy textarea { width: 100%; min-height: 9rem; padding: var(--app-s3) var(--app-s4); border: 1px solid var(--app-line-strong); border-radius: var(--app-radius-sm); background: var(--app-surface); line-height: 1.5; resize: vertical; }
 
+  /* AI revision panel inside the edit form */
+  .bl-revise { display: grid; gap: var(--app-s3); padding: var(--app-s4); border: 1px solid var(--app-line-strong); border-radius: var(--app-radius); background: var(--app-surface-2); }
+  .bl-revise h3 { margin: 0; font-size: var(--app-text-md); }
+  .bl-revise .notice { margin: 0; }
+
   /* Disclosure */
   .bl-details { padding-block: var(--app-s1); }
   .bl-details > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--app-s3); min-height: 52px; cursor: pointer; font-weight: 700; color: var(--app-link); list-style: none; }
@@ -79,6 +110,8 @@
 }
 @keyframes bl-spin { to { rotate: 360deg; } }
 @media (max-width: 40rem) {
+  .app .bl-head-actions { width: 100%; }
+  .app .bl-ledger { min-width: 40rem; }
   .app .bl-item { grid-template-columns: minmax(0, 1fr); }
   .app .bl-item .btn { width: 100%; }
   .app .bl-download { grid-template-columns: minmax(0, 1fr); }

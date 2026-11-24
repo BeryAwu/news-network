@@ -80,6 +80,8 @@ export interface BlastListItem {
   mediaCount: number;
   publishedCount: number;
   failedCount: number;
+  /** For LEGACY items: the shared status of their old article records, when all agree. */
+  legacyArticleStatus: string | null;
 }
 
 /** PATCH /api/blasts/[id] body. Every field optional; omitted fields stay as they are. Applies to every media at once. */
@@ -93,3 +95,6 @@ export interface BlastEditInput {
   featuredAssetId?: string | null;
   galleryAssetIds?: string[];
 }
+
+/** A proposed AI revision. Reviewable, not yet saved: pressing "Simpan perubahan" stores it as a new version. */
+export interface BlastDraftPreview { title: string; excerpt: string; body: string; seoTitle: string; metaDescription: string; tags: string[] }

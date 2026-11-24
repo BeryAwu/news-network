@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // The dashboard key lives in the database; tests control it here instead of touching one.
 type FakeKey = { id: string; secret: string | null; status: "ok" | "cooldown" | "rejected"; cooldownUntil: Date | null };
 const saved = vi.hoisted(() => ({ keys: [] as FakeKey[], model: null as string | null, outcomes: [] as { id: string; outcome: unknown }[] }));
-vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiSettings: async () => ({ keys: saved.keys.map((key, position) => ({ label: "", hint: "", lastError: "", lastUsedAt: null, position, addedByName: "", ...key })), model: saved.model }), recordKeyOutcome: async (id: string, outcome: unknown) => { saved.outcomes.push({ id, outcome }); } }));
+vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiSettings: async () => ({ keys: saved.keys.map((key, position) => ({ label: "", hint: "", lastError: "", lastUsedAt: null, position, addedByName: "", ...key })), model: saved.model, provider: null, baseUrl: null }), recordKeyOutcome: async (id: string, outcome: unknown) => { saved.outcomes.push({ id, outcome }); } }));
 const key = (id: string, secret: string | null, extra: Partial<FakeKey> = {}): FakeKey => ({ id, secret, status: "ok", cooldownUntil: null, ...extra });
 import { aiConfiguration, articleDraftSchema, generateDraft, plainAiFailure, validateDraftEvidence } from "../lib/ai";
-import { checkOpenRouterKey } from "../lib/ai-settings";
+import { checkAiKey, listAiModels, OPENROUTER_BASE_URL } from "../lib/ai-settings";
 import { parsePage, robotsAllows } from "../lib/ingest";
 import { createEditorialEvidenceSnapshot } from "../lib/editorial-evidence";
 import { isPublicIp, normalizeHostname, slugify } from "../lib/security";
@@ -323,20 +323,37 @@ describe("AI key managed from the dashboard", () => {
   it("tests a key against OpenRouter and says why it fails, so a bad key is never saved", async () => {
     const reply = (status: number, body: unknown = {}) => new Response(JSON.stringify(body), { status });
     vi.stubGlobal("fetch", vi.fn(async () => reply(401)));
-    expect(await checkOpenRouterKey("bad-key-bad-key-bad-key", "qwen/qwen3-32b")).toMatchObject({ ok: false, reason: expect.stringContaining("tidak mengenali") });
+    expect(await checkAiKey("bad-key-bad-key-bad-key", "qwen/qwen3-32b", OPENROUTER_BASE_URL)).toMatchObject({ ok: false, reason: expect.stringContaining("tidak mengenali") });
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => { calls.push(url); return url.endsWith("/auth/key") ? reply(200, { data: { label: "sk-or-v1-abc…xyz", limit: 10, limit_remaining: 7.5 } }) : reply(402); }));
-    expect(await checkOpenRouterKey("empty-credit-key-12345", "qwen/qwen3-32b")).toMatchObject({ ok: false, reason: expect.stringContaining("Kredit") });
+    expect(await checkAiKey("empty-credit-key-12345", "qwen/qwen3-32b", OPENROUTER_BASE_URL)).toMatchObject({ ok: false, reason: expect.stringContaining("Kredit") });
     vi.stubGlobal("fetch", vi.fn(async (url: string) => (url.endsWith("/auth/key") ? reply(200, { data: { label: "k", limit: 10, limit_remaining: 7.5 } }) : reply(200, { choices: [] }))));
-    expect(await checkOpenRouterKey("good-key-good-key-good-1", "qwen/qwen3-32b")).toEqual({ ok: true, label: "k", limit: 10, remaining: 7.5 });
+    expect(await checkAiKey("good-key-good-key-good-1", "qwen/qwen3-32b", OPENROUTER_BASE_URL)).toEqual({ ok: true, label: "k", limit: 10, remaining: 7.5 });
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
-    expect(await checkOpenRouterKey("any-key-any-key-any-key", "m")).toMatchObject({ ok: false, reason: expect.stringContaining("Tidak bisa menghubungi") });
+    expect(await checkAiKey("any-key-any-key-any-key", "m", OPENROUTER_BASE_URL)).toMatchObject({ ok: false, reason: expect.stringContaining("Tidak bisa menghubungi") });
+  });
+
+  it("reads the provider model catalogue, dropping duplicates and blank ids", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: [
+      { id: "ngodeai/glm-5.3-flash" },
+      { id: "ngodeai/deepseek-v4.1-flash-1017" },
+      { id: "ngodeai/glm-5.3-flash" },
+      { id: "  " },
+      { id: "" },
+      { id: "ngodeai/broken/" },
+    ] })));
+    expect(await listAiModels("k", "https://llm.ngodeai.net/v1")).toMatchObject({ ok: true, models: ["ngodeai/deepseek-v4.1-flash-1017", "ngodeai/glm-5.3-flash"], freeModels: [] });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: [{ id: "a/b" }] }, { status: 401 })));
+    expect(await listAiModels("k", "https://x/v1")).toMatchObject({ ok: false, reason: expect.stringContaining("tidak mengenali") });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ nope: true })));
+    expect(await listAiModels("k", "https://x/v1")).toMatchObject({ ok: false, reason: expect.stringContaining("daftar model") });
   });
 
   it("explains a spent or rejected key in plain words", async () => {
-    expect(plainAiFailure("AI provider returned HTTP 402.")).toContain("Kredit OpenRouter habis");
+    expect(plainAiFailure("AI provider returned HTTP 402.")).toContain("Kredit AI habis");
     expect(plainAiFailure("AI provider returned HTTP 401.")).toContain("ditolak");
     expect(plainAiFailure("AI provider returned HTTP 429.")).toContain("membatasi");
-    expect(plainAiFailure("boom")).toBe("Penulisan oleh AI gagal. Coba tulis ulang.");
+    expect(plainAiFailure("AI provider returned HTTP 404.")).toContain("Model AI yang dipilih tidak ada");
+    expect(plainAiFailure("boom")).toBe("Penulisan oleh AI gagal. Coba lagi. Kalau tetap gagal, periksa penyedia dan model di Koneksi layanan.");
   });
 });

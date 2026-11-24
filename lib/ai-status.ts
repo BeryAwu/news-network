@@ -21,6 +21,7 @@ export interface AiKeyStatus {
   /** Where the next AI call gets its key. */
   source: "dashboard" | "env" | null;
   provider: string | null;
+  baseUrl: string | null;
   model: string | null;
   /** The server environment has a key too; it is the last fallback. */
   envKey: boolean;
@@ -34,6 +35,7 @@ export async function readAiKeyStatus(): Promise<AiKeyStatus> {
     configured: config.configured && config.mode !== "test adapter",
     source: config.keySource,
     provider: config.provider,
+    baseUrl: config.baseUrl,
     model: config.model,
     envKey: Boolean(process.env.AI_API_KEY) && ["openai", "openai-compatible", "openrouter"].includes(process.env.AI_PROVIDER?.trim().toLowerCase() ?? ""),
     keys: saved.keys.map((key) => ({ id: key.id, label: key.label, hint: key.hint, status: key.status, unreadable: key.secret === null, cooldownUntil: key.cooldownUntil?.toISOString() ?? null, lastError: key.lastError, lastUsedAt: key.lastUsedAt?.toISOString() ?? null, addedByName: key.addedByName })),

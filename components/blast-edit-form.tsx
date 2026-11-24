@@ -5,7 +5,7 @@ import { CircleAlert } from "lucide-react";
 import BlastImages from "@/components/blast-images";
 import { callApi, messageOf } from "@/components/blast-format";
 import { Failure } from "@/components/plain-errors";
-import type { BlastAsset, BlastContent, BlastDetail, BlastEditInput } from "@/lib/blast-types";
+import type { BlastAsset, BlastContent, BlastDetail, BlastDraftPreview, BlastEditInput } from "@/lib/blast-types";
 
 type Images = { featured: BlastAsset | null; gallery: BlastAsset[] };
 type Field = "title" | "excerpt" | "body" | "tags" | "seoTitle" | "metaDescription";
@@ -53,10 +53,16 @@ export default function BlastEditForm({ blastId, content, live, onSaved, onCance
   const [seoTitle, setSeoTitle] = useState(content.seoTitle);
   const [metaDescription, setMetaDescription] = useState(content.metaDescription);
   const [images, setImages] = useState<Images>({ featured: content.featured, gallery: content.gallery });
+  /** What the server currently holds. AI revisions update it, so "no changes" stays truthful after a revision. */
+  const [savedContent, setSavedContent] = useState<BlastContent>(content);
   const [pending, setPending] = useState(0);
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [instruction, setInstruction] = useState("");
+  const [revising, setRevising] = useState(false);
+  const [reviseNotice, setReviseNotice] = useState("");
+  const [reviseError, setReviseError] = useState("");
 
   function clear(field: Field) {
     setErrors((current) => (current[field] ? { ...current, [field]: undefined } : current));
@@ -92,13 +98,13 @@ export default function BlastEditForm({ blastId, content, live, onSaved, onCance
     }
 
     const payload: BlastEditInput = {};
-    if (title.trim() !== content.title) payload.title = title.trim();
-    if (excerpt.trim() !== content.excerpt) payload.excerpt = excerpt.trim();
-    if (body.trim() !== content.body) payload.body = body.trim();
-    if (seoTitle.trim() !== content.seoTitle) payload.seoTitle = seoTitle.trim();
-    if (metaDescription.trim() !== content.metaDescription) payload.metaDescription = metaDescription.trim();
-    if (tags.join("\n") !== content.tags.join("\n")) payload.tags = tags;
-    if (imageKey(images) !== imageKey({ featured: content.featured, gallery: content.gallery })) {
+    if (title.trim() !== savedContent.title) payload.title = title.trim();
+    if (excerpt.trim() !== savedContent.excerpt) payload.excerpt = excerpt.trim();
+    if (body.trim() !== savedContent.body) payload.body = body.trim();
+    if (seoTitle.trim() !== savedContent.seoTitle) payload.seoTitle = seoTitle.trim();
+    if (metaDescription.trim() !== savedContent.metaDescription) payload.metaDescription = metaDescription.trim();
+    if (tags.join("\n") !== savedContent.tags.join("\n")) payload.tags = tags;
+    if (imageKey(images) !== imageKey({ featured: savedContent.featured, gallery: savedContent.gallery })) {
       payload.featuredAssetId = images.featured?.id ?? null;
       payload.galleryAssetIds = images.gallery.map((asset) => asset.id);
     }
@@ -113,6 +119,7 @@ export default function BlastEditForm({ blastId, content, live, onSaved, onCance
     setSaving(true);
     try {
       const detail = await callApi<BlastDetail>(`/api/blasts/${encodeURIComponent(blastId)}`, "Perubahan belum tersimpan. Coba lagi sebentar lagi.", { method: "PATCH", body: payload, fields: limitMessages });
+      if (detail.content) setSavedContent(detail.content);
       onSaved(detail);
     } catch (error) {
       if (error instanceof Failure && error.field && error.field in limitMessages) show({ [error.field as Field]: error.message });
@@ -121,8 +128,47 @@ export default function BlastEditForm({ blastId, content, live, onSaved, onCance
     }
   }
 
-  const describe = (field: Field) => (errors[field] ? `${fieldIds[field]}-error` : `${fieldIds[field]}-help`);
+  async function revise() {
+    if (revising || saving) return;
+    if (!instruction.trim()) {
+      setReviseError("Tulis dulu apa yang ingin diubah atau ditambahkan.");
+      return;
+    }
+    if (pending > 0) {
+      setReviseError("Ada gambar yang belum selesai diunggah. Tunggu sampai selesai, lalu minta revisi.");
+      return;
+    }
+    const dirty = title !== content.title || excerpt !== content.excerpt || body !== content.body || seoTitle !== content.seoTitle || metaDescription !== content.metaDescription || tagsText !== content.tags.join(", ");
+    if (dirty && !window.confirm("Isian yang belum disimpan akan ditimpa oleh hasil AI. Lanjutkan?")) return;
 
+    setRevising(true);
+    setReviseError("");
+    setReviseNotice("");
+    try {
+      const data = await callApi<{ draft: BlastDraftPreview; summary: string }>(
+        `/api/blasts/${encodeURIComponent(blastId)}/revise`,
+        "Revisi AI gagal. Coba lagi sebentar lagi.",
+        { method: "POST", body: { instruction: instruction.trim() } },
+      );
+      const next = data.draft;
+      setTitle(next.title);
+      setExcerpt(next.excerpt);
+      setBody(next.body);
+      setSeoTitle(next.seoTitle);
+      setMetaDescription(next.metaDescription);
+      setTagsText(next.tags.join(", "));
+      setErrors({});
+      setFormError("");
+      setInstruction("");
+      setReviseNotice("Hasil revisi mengganti isian di bawah — belum tersimpan. Baca dulu, ubah kalau perlu, lalu tekan Simpan perubahan untuk menyimpannya.");
+    } catch (error) {
+      setReviseError(messageOf(error, "Revisi AI gagal. Coba lagi sebentar lagi."));
+    } finally {
+      setRevising(false);
+    }
+  }
+
+  const describe = (field: Field) => (errors[field] ? `${fieldIds[field]}-error` : `${fieldIds[field]}-help`);
   return (
     <form className="card bl-form" noValidate onSubmit={(event) => void save(event)} aria-label="Edit berita">
       <div className="stack-sm">
@@ -133,6 +179,26 @@ export default function BlastEditForm({ blastId, content, live, onSaved, onCance
             : "Perubahan berlaku untuk semua media sekaligus. Setelah menyimpan, baca lagi beritanya, lalu terbitkan."}
         </p>
       </div>
+
+      <section className="bl-revise" aria-labelledby="bl-revise-title">
+        <div className="stack-sm">
+          <h3 id="bl-revise-title">Revisi dengan AI</h3>
+          <p className="muted">Bilang apa yang mau diubah atau apa yang masih kurang. AI menulis ulang naskah, hasilnya mengganti isian di bawah — dan baru tersimpan saat kamu menekan Simpan perubahan.</p>
+        </div>
+        <div className="field">
+          <label htmlFor="bl-revise-instruction">Apa yang perlu diubah?</label>
+          <textarea id="bl-revise-instruction" className="bl-excerpt-input" value={instruction} onChange={(event) => { setInstruction(event.target.value); setReviseError(""); }} placeholder="Contoh: Pembuka terlalu panjang, ringkas jadi dua kalimat. Tambahkan penjelasan kenapa banner itu wajib, dan tutup dengan ajakan menghubungi panitia." />
+          <span className="field-help">Sebut bagian mana dan hasil yang diinginkan. Jangan minta fakta yang tidak ada di topik, karena AI tidak boleh mengarang.</span>
+        </div>
+        <div className="actions">
+          <button type="button" className="btn" disabled={revising || saving} onClick={() => void revise()}>
+            {revising ? "Menulis ulang…" : "Minta revisi AI"}
+          </button>
+          <span className="field-help">Biasanya 30 sampai 90 detik.</span>
+        </div>
+        {reviseError && <div role="alert" className="notice notice-error">{reviseError}</div>}
+        {reviseNotice && <div role="status" className="notice notice-success">{reviseNotice}</div>}
+      </section>
 
       <div className="field">
         <label htmlFor={fieldIds.title}>Judul berita</label>

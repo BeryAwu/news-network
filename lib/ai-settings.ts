@@ -4,6 +4,8 @@ import { decryptSecret, encryptSecret } from "@/lib/secrets";
 
 const KEY_PREFIX = "ai.key.";
 const KEY_MODEL = "ai.model";
+const KEY_PROVIDER = "ai.provider";
+const KEY_BASE_URL = "ai.baseUrl";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-235b-a22b-2507";
@@ -25,20 +27,22 @@ export interface StoredAiKey {
   addedByName: string;
 }
 
-export interface AiSettings { keys: StoredAiKey[]; model: string | null }
+export interface AiSettings { keys: StoredAiKey[]; model: string | null; provider: string | null; baseUrl: string | null }
 
-const EMPTY: AiSettings = { keys: [], model: null };
+const EMPTY: AiSettings = { keys: [], model: null, provider: null, baseUrl: null };
 
 /** Read fresh on every call, so a change is used by the very next request in any process. Never throws. */
 export async function readAiSettings(): Promise<AiSettings> {
   try {
-    const rows = await db.integrationSetting.findMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }] } });
+    const rows = await db.integrationSetting.findMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
     const modelRow = rows.find((row) => row.key === KEY_MODEL);
+    const providerRow = rows.find((row) => row.key === KEY_PROVIDER);
+    const baseUrlRow = rows.find((row) => row.key === KEY_BASE_URL);
     const keys = rows
       .filter((row) => row.key.startsWith(KEY_PREFIX))
       .map((row): StoredAiKey => ({ id: row.key.slice(KEY_PREFIX.length), label: row.label, hint: row.hint, secret: decryptSecret(row.value), status: (row.status as KeyStatus) || "ok", cooldownUntil: row.cooldownUntil, lastError: row.lastError, lastUsedAt: row.lastUsedAt, position: row.position, addedByName: row.updatedByName }))
       .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
-    return { keys, model: modelRow ? decryptSecret(modelRow.value) : null };
+    return { keys, model: modelRow ? decryptSecret(modelRow.value) : null, provider: providerRow ? decryptSecret(providerRow.value) : null, baseUrl: baseUrlRow ? decryptSecret(baseUrlRow.value) : null };
   } catch { return EMPTY; }
 }
 
@@ -80,9 +84,16 @@ export async function saveAiModel(by: { name: string }, model: string) {
   await db.integrationSetting.upsert({ where: { key: KEY_MODEL }, create: { key: KEY_MODEL, value: encryptSecret(model), updatedByName: by.name }, update: { value: encryptSecret(model), updatedByName: by.name } });
 }
 
+export async function saveAiProvider(by: { name: string }, provider: string, baseUrl: string) {
+  await db.$transaction([
+    db.integrationSetting.upsert({ where: { key: KEY_PROVIDER }, create: { key: KEY_PROVIDER, value: encryptSecret(provider), updatedByName: by.name }, update: { value: encryptSecret(provider), updatedByName: by.name } }),
+    db.integrationSetting.upsert({ where: { key: KEY_BASE_URL }, create: { key: KEY_BASE_URL, value: encryptSecret(baseUrl), updatedByName: by.name }, update: { value: encryptSecret(baseUrl), updatedByName: by.name } }),
+  ]);
+}
+
 /** Forgets every dashboard key and the model; the server environment takes over again. */
 export async function clearAiSettings() {
-  await db.integrationSetting.deleteMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }] } });
+  await db.integrationSetting.deleteMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
 }
 
 const HOUR = 60 * 60 * 1000;
@@ -91,7 +102,7 @@ const HOUR = 60 * 60 * 1000;
 export function keyConsequence(status: number, now = new Date()): { status: KeyStatus; cooldownUntil: Date | null; lastError: string } | null {
   if (status === 402) return { status: "cooldown", cooldownUntil: new Date(now.getTime() + 6 * HOUR), lastError: "Kredit habis" };
   if (status === 429) return { status: "cooldown", cooldownUntil: new Date(now.getTime() + 5 * 60 * 1000), lastError: "Kena batas permintaan" };
-  if (status === 401 || status === 403) return { status: "rejected", cooldownUntil: null, lastError: "Kunci ditolak OpenRouter" };
+  if (status === 401 || status === 403) return { status: "rejected", cooldownUntil: null, lastError: "Kunci ditolak penyedia" };
   return null;
 }
 
@@ -111,25 +122,76 @@ export type KeyCheck =
   | { ok: true; label: string; limit: number | null; remaining: number | null }
   | { ok: false; reason: string };
 
+export type ModelList =
+  | { ok: true; models: string[]; freeModels: string[] }
+  | { ok: false; reason: string };
+
+/** Reads the provider's own catalogue from GET {baseUrl}/models (OpenRouter and OpenAI-compatible both return { data: [{ id }] }). */
+export async function listAiModels(apiKey: string, baseUrl: string): Promise<ModelList> {
+  const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json" };
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/models`, { headers, signal: AbortSignal.timeout(20000) });
+    if (!response.ok) return { ok: false, reason: REASONS[response.status] ?? `Penyedia menjawab dengan kode ${response.status} saat meminta daftar model.` };
+    const body = await response.json() as unknown;
+    const rows = Array.isArray(body) ? body as unknown[] : ((body as { data?: unknown }).data as unknown[] | undefined);
+    if (!Array.isArray(rows)) return { ok: false, reason: "Penyedia tidak mengembalikan daftar model yang bisa dibaca." };
+    const isFree = (row: unknown) => {
+      const p = (row as { pricing?: Record<string, unknown> }).pricing;
+      if (!p) return false;
+      return String(p.prompt ?? "1") === "0" && String(p.completion ?? "1") === "0";
+    };
+    const toId = (row: unknown): string | null => {
+      const id = typeof row === "string" ? row : (row as { id?: unknown }).id;
+      if (typeof id !== "string" || !id.trim() || id.trim().endsWith("/")) return null;
+      return id.trim();
+    };
+    const seen = new Set<string>();
+    const models: string[] = [];
+    const freeModels: string[] = [];
+    for (const row of rows) {
+      const id = toId(row);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      models.push(id);
+      if (isFree(row)) freeModels.push(id);
+    }
+    models.sort((a, b) => a.localeCompare(b));
+    freeModels.sort((a, b) => a.localeCompare(b));
+    if (!models.length) return { ok: false, reason: "Penyedia tidak mengembalikan model apa pun untuk kunci ini." };
+    return { ok: true, models: models.slice(0, 2000), freeModels: freeModels.slice(0, 2000) };
+  } catch {
+    return { ok: false, reason: "Tidak bisa mengambil daftar model. Periksa base URL dan koneksi internet server." };
+  }
+}
+
 const REASONS: Record<number, string> = {
-  401: "OpenRouter tidak mengenali kunci ini. Periksa lagi, pastikan tidak ada spasi, lalu salin ulang dari openrouter.ai/settings/keys.",
-  402: "Kredit OpenRouter pada kunci ini habis. Isi kredit di openrouter.ai atau pakai kunci lain.",
-  403: "Kunci ini ditolak OpenRouter. Buat kunci baru di openrouter.ai/settings/keys.",
-  404: "Model yang dipilih tidak ditemukan di OpenRouter. Periksa penulisan nama modelnya.",
-  429: "OpenRouter sedang membatasi permintaan. Tunggu beberapa menit lalu coba lagi.",
+  401: "Penyedia API tidak mengenali kunci ini. Periksa lagi, pastikan tidak ada spasi, lalu salin ulang dari dashboard penyedia.",
+  402: "Kredit pada kunci ini habis. Isi kredit di dashboard penyedia atau pakai kunci lain.",
+  403: "Kunci ini ditolak penyedia. Buat kunci baru di dashboard penyedia.",
+  404: "Model yang dipilih tidak ditemukan di penyedia. Periksa penulisan nama modelnya.",
+  429: "Penyedia sedang membatasi permintaan. Tunggu beberapa menit lalu coba lagi.",
 };
 
-/** Proves a key works: asks OpenRouter who it belongs to (and how much credit is left), then makes one tiny completion with the chosen model. */
-export async function checkOpenRouterKey(apiKey: string, model: string): Promise<KeyCheck> {
+/** Proves a key works: checks auth (credit info if available), then makes one tiny completion with the chosen model. */
+export async function checkAiKey(apiKey: string, model: string, baseUrl: string): Promise<KeyCheck> {
   const headers = { authorization: `Bearer ${apiKey}`, "content-type": "application/json", "HTTP-Referer": process.env.ADMIN_BASE_URL || "http://localhost:3000", "X-Title": "Newsroom" };
+  const isOpenRouter = baseUrl.includes("openrouter.ai");
   try {
-    const info = await fetch(`${OPENROUTER_BASE_URL}/auth/key`, { headers, signal: AbortSignal.timeout(15000) });
-    if (!info.ok) return { ok: false, reason: REASONS[info.status] ?? `OpenRouter menjawab dengan kode ${info.status}. Coba lagi sebentar lagi.` };
-    const data = (await info.json() as { data?: { label?: string; limit?: number | null; limit_remaining?: number | null } }).data ?? {};
-    const completion = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 8, messages: [{ role: "user", content: "Balas dengan satu kata: OK" }] }), signal: AbortSignal.timeout(30000) });
+    let label = "";
+    let limit: number | null = null;
+    let remaining: number | null = null;
+    if (isOpenRouter) {
+      const info = await fetch(`${baseUrl}/auth/key`, { headers, signal: AbortSignal.timeout(15000) });
+      if (!info.ok) return { ok: false, reason: REASONS[info.status] ?? `Penyedia menjawab dengan kode ${info.status}. Coba lagi sebentar lagi.` };
+      const data = (await info.json() as { data?: { label?: string; limit?: number | null; limit_remaining?: number | null } }).data ?? {};
+      label = data.label ?? "";
+      limit = data.limit ?? null;
+      remaining = data.limit_remaining ?? null;
+    }
+    const completion = await fetch(`${baseUrl}/chat/completions`, { method: "POST", headers, body: JSON.stringify({ model, max_tokens: 8, messages: [{ role: "user", content: "Balas dengan satu kata: OK" }] }), signal: AbortSignal.timeout(30000) });
     if (!completion.ok) return { ok: false, reason: REASONS[completion.status] ?? `Kunci dikenali, tetapi model ${model} belum bisa dipakai (kode ${completion.status}).` };
-    return { ok: true, label: data.label ?? "", limit: data.limit ?? null, remaining: data.limit_remaining ?? null };
+    return { ok: true, label, limit, remaining };
   } catch {
-    return { ok: false, reason: "Tidak bisa menghubungi OpenRouter dari server. Periksa koneksi internet server, lalu coba lagi." };
+    return { ok: false, reason: "Tidak bisa menghubungi penyedia API dari server. Periksa alamat base URL dan koneksi internet server, lalu coba lagi." };
   }
 }

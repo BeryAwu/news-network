@@ -44,6 +44,7 @@ export default function BlastHub({ id }: { id: string }) {
   const [skipped, setSkipped] = useState<Skipped[]>([]);
   const [scheduledFor, setScheduledFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [retryError, setRetryError] = useState("");
   /** Bumped whenever an action returns fresh data, so a slower poll that started earlier cannot overwrite it. */
   const version = useRef(0);
   const base = `/api/blasts/${encodeURIComponent(id)}`;
@@ -127,6 +128,21 @@ export default function BlastHub({ id }: { id: string }) {
     }
   }
 
+  async function retry() {
+    setBusy(true);
+    setRetryError("");
+    setFlash("");
+    try {
+      await callApi<{ ok: boolean }>(`${base}/retry`, "Berita belum bisa ditulis ulang. Coba lagi sebentar lagi.", { method: "POST" });
+      await load();
+      window.scrollTo({ top: 0 });
+    } catch (error) {
+      setRetryError(messageOf(error, "Berita belum bisa ditulis ulang. Coba lagi sebentar lagi."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function saved(next: BlastDetail) {
     apply(next);
     setEditing(false);
@@ -188,17 +204,36 @@ export default function BlastHub({ id }: { id: string }) {
       </>
     );
   } else if (detail.status === "FAILED") {
+    const reason = detail.generation?.error ?? "AI tidak berhasil menulis berita ini, dan penyebabnya tidak diketahui.";
     body = (
       <>
         <div role="alert" className="notice notice-error">
           <CircleAlert size={18} aria-hidden="true" />
           <div className="stack-sm">
             <strong>Berita ini gagal dibuat.</strong>
-            <span>{detail.generation?.error ?? "AI tidak berhasil menulis berita ini, dan penyebabnya tidak diketahui."}</span>
-            <span>Tidak ada yang terbit. Narasi Anda tersimpan di bawah, jadi Anda bisa menyalinnya dan menulis ulang.</span>
+            <span>{reason}</span>
+            <span>Tidak ada yang terbit. Topik dan narasi Anda tetap tersimpan, jadi Anda bisa mencoba lagi tanpa mengetik ulang.</span>
           </div>
         </div>
-        <div className="bl-actions"><Link className="btn btn-primary" href="/briefs"><PenLine size={18} aria-hidden="true" />Tulis ulang di Tulis berita</Link></div>
+        {retryError && (
+          <div role="alert" className="notice notice-error">
+            <CircleAlert size={18} aria-hidden="true" />
+            <span>{retryError}</span>
+          </div>
+        )}
+        <div className="bl-actions">
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void retry()}>
+            <LoaderCircle size={18} aria-hidden="true" className={busy ? "bl-spin" : undefined} />
+            {busy ? "Mencoba lagi…" : "Coba lagi tulis dengan AI"}
+          </button>
+          <Link className="btn" href="/briefs">
+            <PenLine size={18} aria-hidden="true" />Buat ulang dari nol
+          </Link>
+        </div>
+        <p className="muted">
+          <strong>Coba lagi</strong> memakai topik, narasi, dan gaya yang sama, lalu menulis ulang dengan AI.{" "}
+          <strong>Buat ulang dari nol</strong> membuka Tulis berita supaya Anda bisa mengubah narasi lebih dulu sebelum menulis.
+        </p>
         <OriginalNarrative text={detail.originalNarrative} open />
       </>
     );

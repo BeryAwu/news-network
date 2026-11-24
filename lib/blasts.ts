@@ -6,9 +6,9 @@ import { publishTarget } from "@/lib/publishing";
 import { publishingQueue } from "@/lib/publish-queue";
 import { failStaleGenerationRuns } from "@/lib/generation";
 import { plainPublishError } from "@/lib/publish-reasons";
-import { plainAiFailure } from "@/lib/ai";
-import type { Prisma } from "@prisma/client";
-import type { BlastAsset, BlastContent, BlastDetail, BlastEditInput, BlastLink, BlastListItem, BlastMedia, BlastMode, BlastStatus, PublicationState } from "@/lib/blast-types";
+import { aiConfiguration, DraftEvidenceValidationError, generateDraft, IntegrationNotConfigured, plainAiFailure, PROMPT_VERSION } from "@/lib/ai";
+import type { Prisma, VersionChange } from "@prisma/client";
+import type { BlastAsset, BlastContent, BlastDetail, BlastDraftPreview, BlastEditInput, BlastLink, BlastListItem, BlastMedia, BlastMode, BlastStatus, PublicationState } from "@/lib/blast-types";
 
 type User = { id: string; name: string; roles: { role: string }[] };
 
@@ -102,7 +102,9 @@ export async function listBlasts(userId: string, page = 1, take = 20, opts: Blas
     if (!blast) continue;
     const run = blast.articles.length ? null : await db.aiGenerationRun.findFirst({ where: { sourceBriefId: blast.id, operation: "GENERATE_ARTICLE", mediaSiteId: null }, orderBy: { createdAt: "desc" }, select: { status: true } });
     const status = deriveStatus(blast, run);
-    items.push({ id: blast.id, createdAt: blast.createdAt.toISOString(), author: blast.createdBy, status, mode: (blast.contentMode as BlastMode | null) ?? null, ...summarize(blast, status) });
+    const statuses = new Set(blast.articles.map((article) => article.status));
+    const legacyArticleStatus = statuses.size === 1 ? [...statuses][0] : null;
+    items.push({ id: blast.id, createdAt: blast.createdAt.toISOString(), author: blast.createdBy, status, mode: (blast.contentMode as BlastMode | null) ?? null, legacyArticleStatus, ...summarize(blast, status) });
   }
   return { items, total, page: safePage, pages: Math.max(1, Math.ceil(total / take)) };
 }
@@ -236,7 +238,7 @@ export async function startBlast(user: User, input: StartBlastInput): Promise<{ 
 
 const assetShape = (a: { secureUrl: string; altText: string; caption: string; credit: string; isAiGenerated: boolean; width: number; height: number }) => ({ secureUrl: a.secureUrl, altText: a.altText, caption: a.caption, credit: a.credit, isAiGenerated: a.isAiGenerated, width: a.width, height: a.height });
 
-export async function editBlast(user: User, id: string, input: BlastEditInput) {
+export async function editBlast(user: User, id: string, input: BlastEditInput, change?: { type: VersionChange; summary: string }) {
   const blast = await loadBlast(id);
   if (!blast) throw new BlastError("Berita tidak ditemukan.", 404);
   await assertCanSee(user, blast);
@@ -274,7 +276,7 @@ export async function editBlast(user: User, id: string, input: BlastEditInput) {
         data: { ...fields, versionNumber: { increment: 1 }, ...(live ? {} : { status: "NEEDS_REVIEW", approvedAt: null, approvedById: null }) },
       });
       if (saved.count !== 1) throw new BlastError("Berita baru saja diubah orang lain. Muat ulang halaman, lalu coba lagi.", 409);
-      const version = await tx.articleVersion.create({ data: { articleId: article.id, versionNumber: article.versionNumber + 1, slug: article.slug, imageBrief: article.imageBrief, categoryId: article.categoryId, ...fields, changeType: "MANUAL_EDIT", changeSummary: live ? "Perbaikan setelah terbit." : "Disunting operator.", claimsUsed: article.claimsUsed as Prisma.InputJsonValue, uncertainties: article.uncertainties as Prisma.InputJsonValue, createdById: user.id } });
+      const version = await tx.articleVersion.create({ data: { articleId: article.id, versionNumber: article.versionNumber + 1, slug: article.slug, imageBrief: article.imageBrief, categoryId: article.categoryId, ...fields, changeType: change?.type ?? "MANUAL_EDIT", changeSummary: change?.summary ?? (live ? "Perbaikan setelah terbit." : "Disunting operator."), claimsUsed: article.claimsUsed as Prisma.InputJsonValue, uncertainties: article.uncertainties as Prisma.InputJsonValue, createdById: user.id } });
       if (live) {
         const { featured, gallery } = await resolveAssets(featuredAssetId, galleryAssetIds);
         for (const target of article.publicationTargets.filter((t) => t.status === "PUBLISHED")) {
@@ -294,6 +296,68 @@ export async function editBlast(user: User, id: string, input: BlastEditInput) {
   });
   return getBlastDetail(user, id);
 }
+
+/**
+ * Rewrites the shared article from an operator instruction, keeping the brief's evidence rules.
+ * The draft is NOT saved: it comes back for review, and becomes a new version only when the
+ * operator presses "Simpan perubahan" (which goes through editBlast).
+ */
+export async function reviseBlast(user: User, id: string, instruction: string): Promise<{ draft: BlastDraftPreview; summary: string }> {
+  const blast = await loadBlast(id);
+  if (!blast) throw new BlastError("Berita tidak ditemukan.", 404);
+  await assertCanSee(user, blast);
+  if (blast.createdById !== user.id && !(await hasNetworkWideScope(user.id))) throw new AuthError("Hanya pengarang, admin, atau pemilik yang boleh meminta revisi.", 403);
+  if (!blast.contentMode) throw new BlastError("Berita lama ini tidak bisa direvisi dari layar ini.", 409);
+  if (!blast.articles.length) throw new BlastError("Isi berita belum siap.", 409);
+  for (const t of blast.mediaTargets) await requireMediaAccess(user.id, t.mediaSiteId);
+
+  const article = blast.articles[0];
+  const skill = blast.styleSkillSlug ? await db.writingSkill.findFirst({ where: { slug: blast.styleSkillSlug, isActive: true }, select: { promptGuidance: true } }) : null;
+  const lastRun = await db.aiGenerationRun.findFirst({ where: { sourceBriefId: blast.id, mediaSiteId: null }, orderBy: { createdAt: "desc" }, select: { styleNote: true } });
+  const guidance = [skill?.promptGuidance ?? "", lastRun?.styleNote ? `Catatan gaya khusus dari operator untuk naskah ini: ${lastRun.styleNote}` : ""].filter(Boolean).join("\n\n");
+  const ai = await aiConfiguration();
+  const base = {
+    sourceBriefId: blast.id, articleId: article.id, mediaSiteId: null, operation: "REVISE_ARTICLE" as const,
+    provider: ai.provider || "unconfigured", model: ai.model || "unconfigured", promptVersion: PROMPT_VERSION,
+    inputHash: `${blast.id}:revise:${article.versionNumber}`, createdById: user.id,
+  };
+
+  let result: Awaited<ReturnType<typeof generateDraft>>;
+  try {
+    result = await generateDraft(
+      {
+        workingTitle: blast.workingTitle,
+        narrative: blast.narrative,
+        editorNotes: blast.editorNotes,
+        sourceSummary: blast.sourceSummary,
+        references: blast.references.map(({ id: refId, url, title, publisherName, excerpt, retrievalStatus }) => ({ id: refId, url, title, publisherName, excerpt, retrievalStatus })),
+        facts: blast.facts.map(({ id: factId, claimText, supportStatus, evidenceNote, sourceReferenceId }) => ({ id: factId, claimText, supportStatus, evidenceNote, sourceReferenceId })),
+      },
+      { displayName: "Berita", profile: GENERIC_BLAST_PROFILE, categories: [] },
+      instruction,
+      { title: article.title, excerpt: article.excerpt, body: article.body, seoTitle: article.seoTitle, metaDescription: article.metaDescription, tags: article.tags, imageBrief: article.imageBrief },
+      guidance,
+    );
+  } catch (error) {
+    const reason = error instanceof DraftEvidenceValidationError
+      ? "Model AI tetap menyebut bukti yang tidak tersedia. Tambahkan fakta yang terverifikasi di topik, atau perjelas instruksinya."
+      : error instanceof IntegrationNotConfigured
+        ? error.message
+        : error instanceof Error && /timeout|abort/i.test(`${error.name} ${error.message}`)
+          ? "Penyedia AI terlalu lama menjawab. Coba lagi dengan instruksi yang lebih pendek."
+          : plainAiFailure(error instanceof Error ? error.message : null);
+    await db.aiGenerationRun.create({ data: { ...base, status: "FAILED", errorCode: error instanceof DraftEvidenceValidationError ? "EVIDENCE_VALIDATION_FAILED" : "REVISION_FAILED", errorMessage: (error instanceof Error ? error.message : "Unknown revision error").slice(0, 1000), completedAt: new Date() } });
+    throw new BlastError(reason, 502);
+  }
+
+  const draft = result.draft;
+  const preview: BlastDraftPreview = { title: draft.title, excerpt: draft.excerpt, body: draft.body, seoTitle: draft.seoTitle, metaDescription: draft.metaDescription, tags: draft.tags };
+  await db.aiGenerationRun.create({ data: { ...base, status: "SUCCEEDED", provider: result.provider, model: result.model || "unknown", promptVersion: result.promptVersion, inputHash: result.inputHash, outputSummary: draft.title, latencyMs: result.latencyMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, completedAt: new Date() } });
+  return { draft: preview, summary: result.changeSummary };
+}
+
+/** Neutral profile for blast revisions: the brief carries the editorial material, not a single media brand. */
+const GENERIC_BLAST_PROFILE = { niche: "Berita umum", targetAudience: "Masyarakat umum", editorialMission: "", toneGuidelines: "Netral, jelas, dan mudah dipahami", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 };
 
 // ---------------------------------------------------------------------------------------------
 // Publishing
@@ -386,4 +450,35 @@ export async function unpublishBlast(user: User, id: string) {
     }
   });
   return getBlastDetail(user, id);
+}
+
+/**
+ * Queues a new generation run for a FAILED blast, keeping the same brief, style, and assets.
+ * Does NOT delete existing articles so any partial content is preserved.
+ * Returns the new run id for the caller to execute via after().
+ */
+export async function retryBlast(user: User, id: string): Promise<{ runId: string }> {
+  const blast = await loadBlast(id);
+  if (!blast) throw new BlastError("Berita tidak ditemukan.", 404);
+  await assertCanSee(user, blast);
+  if (!blast.contentMode) throw new BlastError("Berita ini belum pernah diproses AI.", 409);
+  if (blast.contentMode !== "AI") throw new BlastError("Berita ini ditulis langsung, bukan lewat AI.", 409);
+  for (const t of blast.mediaTargets) await requireMediaAccess(user.id, t.mediaSiteId);
+  const lastRun = await db.aiGenerationRun.findFirst({ where: { sourceBriefId: blast.id, mediaSiteId: null }, orderBy: { createdAt: "desc" }, select: { styleNote: true, styleSkillSlug: true } });
+  const ai = await aiConfiguration();
+  const run = await db.aiGenerationRun.create({ data: {
+    sourceBriefId: blast.id,
+    mediaSiteId: null,
+    operation: "GENERATE_ARTICLE",
+    provider: ai.provider || process.env.AI_PROVIDER || "unconfigured",
+    model: ai.model || process.env.AI_MODEL || "unconfigured",
+    promptVersion: "pending",
+    status: "PENDING",
+    inputHash: `${blast.id}:blast:retry:${Date.now()}`,
+    styleNote: lastRun?.styleNote ?? null,
+    styleSkillSlug: blast.styleSkillSlug ?? lastRun?.styleSkillSlug ?? null,
+    createdById: user.id,
+  } });
+  await db.auditLog.create({ data: { actorUserId: user.id, action: "BLAST_RETRY", entityType: "SourceBrief", entityId: blast.id, metadata: { runId: run.id } } });
+  return { runId: run.id };
 }

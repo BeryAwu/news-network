@@ -1,19 +1,54 @@
-/* Hallmark · shape: app screen · genre: playful · theme: Coral (tokens in app.css) · redesign: full · nav: dark task sidebar · states: loading, empty, error, full · axes: light/rounded-sans/warm · posture: restrained · contrast: pass */
-/* Service connections screen: one card per service with a traffic-light badge. */
+/* Hallmark · shape: app screen · genre: playful · theme: Coral (tokens in app.css) · redesign: Operate monitor and staged AI configuration · states: loading, empty, error, full · posture: restrained */
+/* Operational status ledger and sequential provider setup. */
 .app {
+  .service-monitor { display: grid; gap: var(--app-s4); padding: var(--app-s5); border: 1px solid var(--app-line); border-radius: var(--app-radius); background: var(--app-surface); }
+  .service-monitor-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--app-s3); }
+  .service-monitor-head h2 { margin: 0 0 var(--app-s1); font-size: var(--app-text-lg); }
+  .service-count { padding: 0.375rem 0.75rem; border-radius: 999px; background: var(--app-surface-2); color: var(--app-ink-2); font-size: var(--app-text-sm); font-weight: 700; }
+  .service-list { display: grid; border-top: 1px solid var(--app-line); }
+  .service-row { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto auto; align-items: center; gap: var(--app-s3); min-height: 68px; padding: var(--app-s3) 0; border-bottom: 1px solid var(--app-line); }
+  .service-row-icon { color: var(--app-muted); }
+  .service-row-green .service-row-icon { color: var(--app-success); }
+  .service-row-yellow .service-row-icon { color: var(--app-warn); }
+  .service-row-red .service-row-icon { color: var(--app-danger); }
+  .service-row-main { display: grid; gap: 2px; min-width: 0; }
+  .service-row-main strong { font-weight: 700; }
+  .service-row-main span { color: var(--app-ink-2); font-size: var(--app-text-sm); }
+  .service-row-main small { color: var(--app-muted); font-size: var(--app-text-xs); }
+  .service-row-details { max-width: 20rem; }
+  .service-row-details summary { color: var(--app-muted); cursor: pointer; font-size: var(--app-text-sm); }
+  .service-row-details div { margin-top: var(--app-s2); padding: var(--app-s3); border-radius: var(--app-radius-sm); background: var(--app-surface-2); color: var(--app-ink-2); font-size: var(--app-text-xs); }
+  .service-row-details p { margin: 0 0 var(--app-s2); }
+
   .service-card { display: grid; gap: var(--app-s3); align-content: start; }
-  .service-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--app-s3); flex-wrap: wrap; }
-  .service-head h2 { font-size: var(--app-text-lg); text-wrap: balance; }
+  .service-head { display: flex; align-items: center; justify-content: space-between; gap: var(--app-s3); }
+  .service-head h2 { font-size: var(--app-text-lg); font-weight: 600; }
+  .service-head .badge { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.75rem; font-weight: 600; font-size: var(--app-text-sm); }
   .service-head .badge svg { flex: none; }
-  .service-purpose { font-weight: 600; }
-  .service-state { color: var(--app-ink-2); }
+  .service-purpose { color: var(--app-ink-2); font-size: var(--app-text-base); }
+  .service-state { margin-top: var(--app-s2); }
+  .service-meta { color: var(--app-ink-2); font-size: var(--app-text-sm); font-weight: 500; }
+  .service-details { margin-top: var(--app-s2); }
+  .service-details summary { color: var(--app-muted); font-size: var(--app-text-sm); cursor: pointer; user-select: none; }
+  .service-details summary:hover { color: var(--app-ink-1); }
+  .service-details[open] summary { margin-bottom: var(--app-s2); }
   .tech-note { color: var(--app-muted); font-size: var(--app-text-xs); overflow-wrap: anywhere; }
-  .tech-note code { font-size: inherit; }
+  .tech-note code { font-size: inherit; background: var(--app-surface-2); padding: 0.125rem 0.375rem; border-radius: 0.25rem; }
 
   .connections-skeleton { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--app-s4); }
   .connections-skeleton .skeleton { min-height: 200px; }
 }
 
-@media (max-width: 40rem) {
+@media (max-width: 50rem) {
   .app .connections-skeleton { grid-template-columns: minmax(0, 1fr); }
+  .app .service-row { grid-template-columns: 1.5rem minmax(0, 1fr) auto; }
+  .app .service-row-details { grid-column: 2 / -1; }
+}
+
+@media (max-width: 32rem) {
+  .app .service-monitor { padding: var(--app-s4); }
+  .app .service-monitor-head { align-items: flex-start; flex-direction: column; }
+  .app .service-row { grid-template-columns: 1.5rem minmax(0, 1fr); }
+  .app .service-row > .badge { grid-column: 2; justify-self: start; }
+  .app .service-row-details { grid-column: 2; }
 }
