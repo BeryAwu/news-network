@@ -84,15 +84,9 @@ export async function POST(request: Request) {
     }
 
     if (input.action === "model") {
-      const current = await currentAiKey();
-      if (!current) return Response.json({ error: "Pasang kunci AI dulu sebelum mengganti model." }, { status: 400 });
-      const check = await checkAiKey(current.apiKey, input.model, current.baseUrl);
-      if (!check.ok) return Response.json({ error: check.reason }, { status: 422 });
       await saveAiModel(user, input.model);
       await audit(user.id, "AI_MODEL_CHANGED", "IntegrationSetting", "ai.model", null, { model: input.model });
-      const status = await readAiKeyStatus();
-      if (status.model !== input.model) return Response.json({ error: "Model tersimpan tetapi belum terbaca ulang. Muat ulang halaman dan coba lagi." }, { status: 500 });
-      return Response.json({ status });
+      return Response.json({ status: await readAiKeyStatus() });
     }
 
     if (!saved.keys.some((key) => key.id === input.id)) return Response.json({ error: "Kunci itu sudah tidak ada. Muat ulang halaman." }, { status: 404 });
