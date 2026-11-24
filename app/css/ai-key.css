@@ -30,6 +30,8 @@
   .ai-key-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--app-s3); }
   .ai-key-item { display: flex; justify-content: space-between; align-items: center; gap: var(--app-s4); flex-wrap: wrap; padding: var(--app-s4); border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); }
   .ai-key-main { display: grid; gap: var(--app-s1); min-width: 0; }
+  .ai-key-model-row { display: flex; gap: var(--app-s2); align-items: center; width: 100%; }
+  .ai-key-model-input { flex: 1 1 0; min-width: 0; font-size: var(--app-text-sm); }
   .ai-key-state { font-weight: 700; }
   .ai-key-ok { color: var(--app-success); }
   .ai-key-warn { color: var(--app-warn); }

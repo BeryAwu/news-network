@@ -4,6 +4,7 @@ import { decryptSecret, encryptSecret } from "@/lib/secrets";
 
 const KEY_PREFIX = "ai.key.";
 const KEY_MODEL = "ai.model";
+const KEY_MODEL_PREFIX = "ai.keymodel.";
 const KEY_PROVIDER = "ai.provider";
 const KEY_BASE_URL = "ai.baseUrl";
 
@@ -16,7 +17,6 @@ export type KeyStatus = "ok" | "cooldown" | "rejected";
 export interface StoredAiKey {
   id: string;
   label: string;
-  /** Last four characters; safe to show. */
   hint: string;
   secret: string | null;
   status: KeyStatus;
@@ -25,6 +25,8 @@ export interface StoredAiKey {
   lastUsedAt: Date | null;
   position: number;
   addedByName: string;
+  /** Per-key model override; null means fall back to global ai.model. */
+  model: string | null;
 }
 
 export interface AiSettings { keys: StoredAiKey[]; model: string | null; provider: string | null; baseUrl: string | null }
@@ -34,13 +36,14 @@ const EMPTY: AiSettings = { keys: [], model: null, provider: null, baseUrl: null
 /** Read fresh on every call, so a change is used by the very next request in any process. Never throws. */
 export async function readAiSettings(): Promise<AiSettings> {
   try {
-    const rows = await db.integrationSetting.findMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
+    const rows = await db.integrationSetting.findMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: { startsWith: KEY_MODEL_PREFIX } }, { key: KEY_MODEL }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
     const modelRow = rows.find((row) => row.key === KEY_MODEL);
     const providerRow = rows.find((row) => row.key === KEY_PROVIDER);
     const baseUrlRow = rows.find((row) => row.key === KEY_BASE_URL);
+    const keyModelMap = new Map(rows.filter((row) => row.key.startsWith(KEY_MODEL_PREFIX)).map((row) => [row.key.slice(KEY_MODEL_PREFIX.length), decryptSecret(row.value)]));
     const keys = rows
       .filter((row) => row.key.startsWith(KEY_PREFIX))
-      .map((row): StoredAiKey => ({ id: row.key.slice(KEY_PREFIX.length), label: row.label, hint: row.hint, secret: decryptSecret(row.value), status: (row.status as KeyStatus) || "ok", cooldownUntil: row.cooldownUntil, lastError: row.lastError, lastUsedAt: row.lastUsedAt, position: row.position, addedByName: row.updatedByName }))
+      .map((row): StoredAiKey => ({ id: row.key.slice(KEY_PREFIX.length), label: row.label, hint: row.hint, secret: decryptSecret(row.value), status: (row.status as KeyStatus) || "ok", cooldownUntil: row.cooldownUntil, lastError: row.lastError, lastUsedAt: row.lastUsedAt, position: row.position, addedByName: row.updatedByName, model: keyModelMap.get(row.key.slice(KEY_PREFIX.length)) ?? null }))
       .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
     return { keys, model: modelRow ? decryptSecret(modelRow.value) : null, provider: providerRow ? decryptSecret(providerRow.value) : null, baseUrl: baseUrlRow ? decryptSecret(baseUrlRow.value) : null };
   } catch { return EMPTY; }
@@ -65,7 +68,7 @@ export async function addAiKey(by: { name: string }, input: { apiKey: string; la
 }
 
 export async function removeAiKey(id: string) {
-  await db.integrationSetting.deleteMany({ where: { key: KEY_PREFIX + id } });
+  await db.integrationSetting.deleteMany({ where: { key: { in: [KEY_PREFIX + id, KEY_MODEL_PREFIX + id] } } });
 }
 
 /** Makes this key the first one tried; the others keep their relative order. */
@@ -78,6 +81,10 @@ export async function makePrimary(id: string) {
 /** Puts a cooling or rejected key back in rotation (after the owner fixed it, or to try it again). */
 export async function resetAiKey(id: string) {
   await db.integrationSetting.update({ where: { key: KEY_PREFIX + id }, data: { status: "ok", cooldownUntil: null, lastError: "" } });
+}
+
+export async function saveAiKeyModel(by: { name: string }, id: string, model: string) {
+  await db.integrationSetting.upsert({ where: { key: KEY_MODEL_PREFIX + id }, create: { key: KEY_MODEL_PREFIX + id, value: encryptSecret(model), updatedByName: by.name }, update: { value: encryptSecret(model), updatedByName: by.name } });
 }
 
 export async function saveAiModel(by: { name: string }, model: string) {
@@ -93,7 +100,7 @@ export async function saveAiProvider(by: { name: string }, provider: string, bas
 
 /** Forgets every dashboard key and the model; the server environment takes over again. */
 export async function clearAiSettings() {
-  await db.integrationSetting.deleteMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: KEY_MODEL }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
+  await db.integrationSetting.deleteMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: { startsWith: KEY_MODEL_PREFIX } }, { key: KEY_MODEL }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
 }
 
 const HOUR = 60 * 60 * 1000;

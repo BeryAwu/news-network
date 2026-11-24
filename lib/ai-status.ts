@@ -4,15 +4,15 @@ import { readAiSettings, type KeyStatus } from "@/lib/ai-settings";
 export interface AiKeyView {
   id: string;
   label: string;
-  /** Last four characters only. */
   hint: string;
   status: KeyStatus;
-  /** The key cannot be decrypted (SESSION_SECRET changed): the owner must add it again. */
   unreadable: boolean;
   cooldownUntil: string | null;
   lastError: string;
   lastUsedAt: string | null;
   addedByName: string;
+  /** Per-key model override; null means global fallback. */
+  model: string | null;
 }
 
 /** What the owner sees about AI keys. Never contains a full key. */
@@ -38,7 +38,7 @@ export async function readAiKeyStatus(): Promise<AiKeyStatus> {
     baseUrl: config.baseUrl,
     model: config.model,
     envKey: Boolean(process.env.AI_API_KEY) && ["openai", "openai-compatible", "openrouter"].includes(process.env.AI_PROVIDER?.trim().toLowerCase() ?? ""),
-    keys: saved.keys.map((key) => ({ id: key.id, label: key.label, hint: key.hint, status: key.status, unreadable: key.secret === null, cooldownUntil: key.cooldownUntil?.toISOString() ?? null, lastError: key.lastError, lastUsedAt: key.lastUsedAt?.toISOString() ?? null, addedByName: key.addedByName })),
+    keys: saved.keys.map((key) => ({ id: key.id, label: key.label, hint: key.hint, status: key.status, unreadable: key.secret === null, cooldownUntil: key.cooldownUntil?.toISOString() ?? null, lastError: key.lastError, lastUsedAt: key.lastUsedAt?.toISOString() ?? null, addedByName: key.addedByName, model: key.model })),
     testMode: config.mode === "test adapter",
   };
 }

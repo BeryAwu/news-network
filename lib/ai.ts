@@ -25,7 +25,7 @@ export function validateDraftEvidence(draft: ArticleDraft, facts: EvidenceFact[]
 /** Safe to hand to pages and clients: never contains a key. */
 export interface AiConfiguration { configured: boolean; mode: string; provider: string | null; model: string | null; keySource: "dashboard" | "env" | null; baseUrl: string | null }
 /** One key to try, in order. `id` is the dashboard key id, or null for the server environment key. */
-interface AiCandidate { id: string | null; apiKey: string; provider: string; baseUrl: string }
+interface AiCandidate { id: string | null; apiKey: string; provider: string; baseUrl: string; model: string | null }
 interface AiCredentials extends AiConfiguration { candidates: AiCandidate[]; fallbackModel: string }
 
 /** Dashboard keys (healthy first) come before the server environment key; read fresh on every call. */
@@ -37,10 +37,10 @@ async function resolveAi(): Promise<AiCredentials> {
   const dashboard = attemptOrder(saved.keys).map((key): AiCandidate => {
     const provider = saved.provider || "openrouter";
     const baseUrl = saved.baseUrl || (provider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1");
-    return { id: key.id, apiKey: key.secret as string, provider, baseUrl };
+    return { id: key.id, apiKey: key.secret as string, provider, baseUrl, model: key.model };
   });
   const supported = envProvider === "openai" || envProvider === "openai-compatible" || envProvider === "openrouter";
-  const envCandidates: AiCandidate[] = supported && process.env.AI_API_KEY ? [{ id: null, apiKey: process.env.AI_API_KEY, provider: envProvider, baseUrl: process.env.AI_BASE_URL || (envProvider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1") }] : [];
+  const envCandidates: AiCandidate[] = supported && process.env.AI_API_KEY ? [{ id: null, apiKey: process.env.AI_API_KEY, provider: envProvider, baseUrl: process.env.AI_BASE_URL || (envProvider === "openrouter" ? OPENROUTER_BASE_URL : "https://api.openai.com/v1"), model: null }] : [];
   const candidates = [...dashboard, ...envCandidates];
   const provider = candidates[0]?.provider ?? (envProvider || null);
   const baseUrl = candidates[0]?.baseUrl ?? null;
@@ -124,7 +124,7 @@ async function draftWith(config: AiCredentials, candidate: AiCandidate | null, b
   const started = Date.now();
   if (provider === "test") return { draft: testDraft(input), provider, model: config.model || "deterministic-test-v1", promptVersion: PROMPT_VERSION, latencyMs: Date.now() - started, inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"), inputTokens: null as number | null, outputTokens: null as number | null, changeSummary: "Adapter uji deterministik; verifikasi editorial tetap diwajibkan." };
   const base = candidate?.baseUrl ?? "";
-  const model = config.model || "gpt-4o-mini";
+  const model = candidate?.model || config.model || "gpt-4o-mini";
   const firstAttemptMessage = `${JSON.stringify(input)}\n\nReturn JSON with title, excerpt, body, suggestedCategory, tags, seoTitle, metaDescription, slugSuggestion, imageBrief, claimsUsed as {claimText,sourceFactIds} objects, and uncertainties.`;
   let likelyError: string | null = null;
   const lastError = await (async () => {

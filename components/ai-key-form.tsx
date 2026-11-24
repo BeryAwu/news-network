@@ -53,6 +53,7 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   const [catalogue, setCatalogue] = useState<ModelCatalogue | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const [freeOnly, setFreeOnly] = useState(false);
+  const [keyModels, setKeyModels] = useState<Record<string, string>>({});
 
   const providerMeta = PROVIDERS.find((p) => p.value === provider) ?? PROVIDERS[0];
   const effectiveBaseUrl = baseUrl.trim() || providerMeta.defaultBaseUrl;
@@ -114,6 +115,13 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
     if (!model.trim()) { setNotice({ tone: "error", text: "Isi nama model dulu." }); return; }
     const data = await call("POST", { action: "model", model: model.trim() }, "model");
     if (data) { setModel(""); setNotice({ tone: "success", text: "Model diganti dan sudah diuji." }); }
+  }
+
+  async function saveKeyModel(key: AiKeyView) {
+    const m = (keyModels[key.id] ?? "").trim();
+    if (!m) return;
+    const data = await call("POST", { action: "keymodel", id: key.id, model: m }, `keymodel:${key.id}`);
+    if (data) setNotice({ tone: "success", text: `Model untuk kunci "${key.label || key.hint}" disimpan: ${m}` });
   }
 
   async function check() {
@@ -185,6 +193,18 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
             const first = index === 0;
             return <li key={key.id} className="ai-key-item">
               <div className="ai-key-main"><strong>{key.label || `Kunci ${index + 1}`}</strong><span className="muted">berakhir …{key.hint}{key.addedByName ? `, ditambah ${key.addedByName}` : ""}</span><span className={`ai-key-state ai-key-${state.tone}`}>{state.text}</span></div>
+              <div className="ai-key-model-row">
+                <input
+                  type="text" className="ai-key-model-input" autoComplete="off" spellCheck={false}
+                  value={keyModels[key.id] ?? key.model ?? ""}
+                  onChange={(e) => setKeyModels((prev) => ({ ...prev, [key.id]: e.target.value }))}
+                  placeholder={status.model || "Model (opsional, kosong = pakai global)"}
+                  aria-label={`Model untuk kunci ${key.label || key.hint}`}
+                />
+                <button type="button" className="btn btn-sm" disabled={busy !== null || !(keyModels[key.id] ?? key.model)} onClick={() => saveKeyModel(key)}>
+                  {busy === `keymodel:${key.id}` ? "Menyimpan…" : "Simpan"}
+                </button>
+              </div>
               <div className="actions">
                 {!first && <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => act("primary", key)}><ArrowUp size={16} aria-hidden="true" />Jadikan pertama</button>}
                 {key.status !== "ok" && !key.unreadable && <button type="button" className="btn btn-sm" disabled={busy !== null} onClick={() => act("reset", key)}><RotateCcw size={16} aria-hidden="true" />Coba lagi</button>}

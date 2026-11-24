@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { audit, requireRole, requireSameOrigin } from "@/lib/auth";
 import { aiConfiguration, currentAiKey } from "@/lib/ai";
-import { addAiKey, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiModel, saveAiProvider } from "@/lib/ai-settings";
+import { addAiKey, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiKeyModel, saveAiModel, saveAiProvider } from "@/lib/ai-settings";
 import { readAiKeyStatus } from "@/lib/ai-status";
 import { jsonError } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
@@ -14,9 +14,10 @@ const addSchema = z.object({ action: z.literal("add"), apiKey: keyText, label: z
 const modelSchema = z.object({ action: z.literal("model"), model: modelText });
 const providerSchema = z.object({ action: z.literal("provider"), provider: z.enum(["openrouter", "openai-compatible", "openai"]), baseUrl: baseUrlText });
 const idSchema = z.object({ action: z.enum(["remove", "primary", "reset"]), id: z.string().regex(/^[a-f0-9]{12}$/) });
+const keyModelSchema = z.object({ action: z.literal("keymodel"), id: z.string().regex(/^[a-f0-9]{12}$/), model: modelText });
 const checkSchema = z.object({ action: z.literal("check") });
 const modelsSchema = z.object({ action: z.literal("models"), baseUrl: baseUrlText.optional(), apiKey: keyText.optional() });
-const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, checkSchema, modelsSchema]);
+const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, modelsSchema]);
 
 /** Owner-only. Keys are never returned, only their last four characters. */
 async function owner(request: Request, mutating: boolean) {
@@ -80,6 +81,13 @@ export async function POST(request: Request) {
     if (input.action === "provider") {
       await saveAiProvider(user, input.provider, input.baseUrl);
       await audit(user.id, "AI_PROVIDER_CHANGED", "IntegrationSetting", "ai.provider", null, { provider: input.provider, baseUrl: input.baseUrl });
+      return Response.json({ status: await readAiKeyStatus() });
+    }
+
+    if (input.action === "keymodel") {
+      if (!saved.keys.some((key) => key.id === input.id)) return Response.json({ error: "Kunci itu sudah tidak ada. Muat ulang halaman." }, { status: 404 });
+      await saveAiKeyModel(user, input.id, input.model);
+      await audit(user.id, "AI_KEY_MODEL_CHANGED", "IntegrationSetting", input.id, null, { model: input.model });
       return Response.json({ status: await readAiKeyStatus() });
     }
 
