@@ -1,24 +1,34 @@
 import { z } from "zod";
 import { audit, requireRole, requireSameOrigin } from "@/lib/auth";
-import { aiConfiguration, currentAiKey } from "@/lib/ai";
-import { addAiKey, addAiKeysBulk, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, readAiSettings, removeAiKey, resetAiKey, saveAiKeyModel, saveAiModel, saveAiProvider, saveFreeModels } from "@/lib/ai-settings";
+import { currentAiKey } from "@/lib/ai";
+import { addAiKey, addAiKeysBulk, addPaidProvider, checkAiKey, clearAiSettings, DEFAULT_OPENROUTER_MODEL, listAiModels, makePrimary, OPENROUTER_BASE_URL, OPENROUTER_SOURCE, readAiSettings, removeAiKey, removePaidProvider, resetAiKey, resetPaidProvider, saveActiveSource, saveAiKeyModel, saveAiModel, saveFreeModels, savePaidModel } from "@/lib/ai-settings";
 import { readAiKeyStatus } from "@/lib/ai-status";
 import { jsonError } from "@/lib/http";
 import { rateLimit } from "@/lib/rate-limit";
 
 const MAX_KEYS = 30;
+const MAX_PAID = 10;
 const keyText = z.string().trim().min(20, "Kunci terlalu pendek. Salin seluruh kunci dari dashboard penyedia.").max(300, "Kunci terlalu panjang.").regex(/^\S+$/, "Kunci tidak boleh berisi spasi.");
 const modelText = z.string().trim().min(3).max(100).regex(/^[A-Za-z0-9._:/-]+$/, "Nama model hanya boleh berisi huruf, angka, titik, garis, titik dua, dan garis miring.");
 const baseUrlText = z.string().trim().url("Base URL harus berupa URL yang valid.").max(200).regex(/^https?:\/\//, "Base URL harus dimulai dengan http:// atau https://");
-const addSchema = z.object({ action: z.literal("add"), apiKey: keyText, label: z.string().trim().max(40).optional(), baseUrl: baseUrlText.optional(), model: modelText.optional() });
-const modelSchema = z.object({ action: z.literal("model"), model: modelText });
-const providerSchema = z.object({ action: z.literal("provider"), provider: z.enum(["openrouter", "openai-compatible", "openai"]), baseUrl: baseUrlText });
-const idSchema = z.object({ action: z.enum(["remove", "primary", "reset"]), id: z.string().regex(/^[a-f0-9]{12}$/) });
-const keyModelSchema = z.object({ action: z.literal("keymodel"), id: z.string().regex(/^[a-f0-9]{12}$/), model: modelText });
-const checkSchema = z.object({ action: z.literal("check") });
+const id = z.string().regex(/^[a-f0-9]{12}$/);
+
+// OpenRouter pool
+const addSchema = z.object({ action: z.literal("add"), apiKey: keyText, label: z.string().trim().max(40).optional(), model: modelText.optional() });
 const bulkSchema = z.object({ action: z.literal("bulk"), apiKeys: z.array(keyText).min(1).max(50) });
-const modelsSchema = z.object({ action: z.literal("models"), baseUrl: baseUrlText.optional(), apiKey: keyText.optional() });
-const bodySchema = z.discriminatedUnion("action", [addSchema, modelSchema, providerSchema, idSchema, keyModelSchema, checkSchema, bulkSchema, modelsSchema]);
+const modelSchema = z.object({ action: z.literal("model"), model: modelText });
+const keyModelSchema = z.object({ action: z.literal("keymodel"), id, model: modelText });
+const idSchema = z.object({ action: z.enum(["remove", "primary", "reset"]), id });
+// Paid providers
+const paidAddSchema = z.object({ action: z.literal("paid-add"), name: z.string().trim().min(2, "Isi nama penyedia.").max(40), baseUrl: baseUrlText, apiKey: keyText, model: modelText });
+const paidModelSchema = z.object({ action: z.literal("paid-model"), id, model: modelText });
+const paidIdSchema = z.object({ action: z.enum(["paid-remove", "paid-reset"]), id });
+// Shared
+const activeSchema = z.object({ action: z.literal("active"), source: z.union([z.literal(OPENROUTER_SOURCE), z.string().regex(/^paid:[a-f0-9]{12}$/)]) });
+const checkSchema = z.object({ action: z.literal("check") });
+/** Model catalogue: OpenRouter by default, a typed provider (baseUrl + apiKey), or a saved paid provider (paidId). */
+const modelsSchema = z.object({ action: z.literal("models"), baseUrl: baseUrlText.optional(), apiKey: keyText.optional(), paidId: id.optional() });
+const bodySchema = z.discriminatedUnion("action", [addSchema, bulkSchema, modelSchema, keyModelSchema, idSchema, paidAddSchema, paidModelSchema, paidIdSchema, activeSchema, checkSchema, modelsSchema]);
 
 /** Owner-only. Keys are never returned, only their last four characters. */
 async function owner(request: Request, mutating: boolean) {
@@ -29,6 +39,7 @@ async function owner(request: Request, mutating: boolean) {
 }
 const tooMany = (error: unknown) => (error instanceof Error && "plain" in error ? Response.json({ error: String((error as { plain: string }).plain) }, { status: 429 }) : null);
 const checkInfo = (check: { label: string; limit: number | null; remaining: number | null }) => ({ label: check.label, limit: check.limit, remaining: check.remaining });
+const gone = (what: string) => Response.json({ error: `${what} itu sudah tidak ada. Muat ulang halaman.` }, { status: 404 });
 
 export async function GET(request: Request) {
   try {
@@ -38,8 +49,10 @@ export async function GET(request: Request) {
 }
 
 /**
- * One endpoint, an `action` per change:
- * add (tested first, saved only if it works, then read back), model, remove, primary (try this key first), reset (put a resting key back), check (re-test the key in use).
+ * One endpoint, an `action` per change.
+ * OpenRouter pool: add (tested first), bulk, model, keymodel, remove, primary, reset.
+ * Paid providers: paid-add (tested first), paid-model, paid-remove, paid-reset.
+ * Shared: active (which source goes first), check (re-test the source in use), models (read a catalogue).
  */
 export async function POST(request: Request) {
   try {
@@ -54,7 +67,7 @@ export async function POST(request: Request) {
       const added = await addAiKeysBulk(user, allowed);
       await audit(user.id, "AI_KEYS_BULK_ADDED", "IntegrationSetting", "bulk", null, { added, total: total + added });
       // Fill the free-model backup pool right away so rotation works without another click. Best effort.
-      const list = await listAiModels(allowed[0], saved.baseUrl || OPENROUTER_BASE_URL);
+      const list = await listAiModels(allowed[0], OPENROUTER_BASE_URL);
       if (list.ok) await saveFreeModels(list.freeModels);
       return Response.json({ status: await readAiKeyStatus(), added, models: list.ok ? list.models : undefined, freeModels: list.ok ? list.freeModels : undefined });
     }
@@ -68,39 +81,71 @@ export async function POST(request: Request) {
     }
 
     if (input.action === "models") {
-      const key = input.apiKey?.trim() || saved.keys.find((row) => row.secret)?.secret || null;
-      if (!key) return Response.json({ error: "Tempel kunci API dulu, atau simpan satu kunci supaya daftar model bisa dibaca." }, { status: 400 });
-      const baseUrl = input.baseUrl || saved.baseUrl || OPENROUTER_BASE_URL;
+      const paid = input.paidId ? saved.paid.find((p) => p.id === input.paidId) : null;
+      if (input.paidId && !paid) return gone("Penyedia");
+      const baseUrl = paid?.baseUrl || input.baseUrl || OPENROUTER_BASE_URL;
+      const key = paid?.apiKey || input.apiKey?.trim() || (baseUrl === OPENROUTER_BASE_URL ? saved.keys.find((row) => row.secret)?.secret : null) || null;
+      if (!key) return Response.json({ error: "Tempel kunci API dulu supaya daftar model bisa dibaca." }, { status: 400 });
       const list = await listAiModels(key, baseUrl);
       if (!list.ok) return Response.json({ error: list.reason }, { status: 422 });
-      // The catalogue of the active provider doubles as the automatic backup pool.
-      if (baseUrl === (saved.baseUrl || OPENROUTER_BASE_URL)) await saveFreeModels(list.freeModels);
+      // Only the OpenRouter catalogue feeds the free-model backup pool.
+      if (baseUrl === OPENROUTER_BASE_URL) await saveFreeModels(list.freeModels);
       return Response.json({ status: await readAiKeyStatus(), models: list.models, freeModels: list.freeModels });
     }
 
     if (input.action === "add") {
       if (saved.keys.length >= MAX_KEYS) return Response.json({ error: `Maksimal ${MAX_KEYS} kunci. Hapus yang tidak dipakai dulu.` }, { status: 400 });
       if (saved.keys.some((key) => key.secret === input.apiKey)) return Response.json({ error: "Kunci ini sudah ada di daftar." }, { status: 409 });
-      const config = await aiConfiguration();
-      const baseUrl = input.baseUrl || saved.baseUrl || config.baseUrl || OPENROUTER_BASE_URL;
-      const model = input.model || saved.model || config.model || DEFAULT_OPENROUTER_MODEL;
-      const check = await checkAiKey(input.apiKey, model, baseUrl);
+      const check = await checkAiKey(input.apiKey, input.model || saved.model || DEFAULT_OPENROUTER_MODEL, OPENROUTER_BASE_URL);
       if (!check.ok) return Response.json({ error: check.reason }, { status: 422 });
-      const id = await addAiKey(user, input);
+      const keyId = await addAiKey(user, input);
       const after = await readAiSettings();
-      if (after.keys.find((key) => key.id === id)?.secret !== input.apiKey) return Response.json({ error: "Kunci tersimpan tetapi belum terbaca ulang oleh aplikasi. Muat ulang halaman dan coba lagi." }, { status: 500 });
-      await audit(user.id, "AI_KEY_ADDED", "IntegrationSetting", id, null, { hint: input.apiKey.slice(-4), label: input.label ?? "" });
+      if (after.keys.find((key) => key.id === keyId)?.secret !== input.apiKey) return Response.json({ error: "Kunci tersimpan tetapi belum terbaca ulang oleh aplikasi. Muat ulang halaman dan coba lagi." }, { status: 500 });
+      await audit(user.id, "AI_KEY_ADDED", "IntegrationSetting", keyId, null, { hint: input.apiKey.slice(-4), label: input.label ?? "" });
       return Response.json({ status: await readAiKeyStatus(), check: checkInfo(check) });
     }
 
-    if (input.action === "provider") {
-      await saveAiProvider(user, input.provider, input.baseUrl);
-      await audit(user.id, "AI_PROVIDER_CHANGED", "IntegrationSetting", "ai.provider", null, { provider: input.provider, baseUrl: input.baseUrl });
+    if (input.action === "paid-add") {
+      if (saved.paid.length >= MAX_PAID) return Response.json({ error: `Maksimal ${MAX_PAID} penyedia. Hapus yang tidak dipakai dulu.` }, { status: 400 });
+      if (input.baseUrl.replace(/\/$/, "") === OPENROUTER_BASE_URL) return Response.json({ error: "Kunci OpenRouter ditambahkan di bagian OpenRouter, bukan di sini." }, { status: 400 });
+      const check = await checkAiKey(input.apiKey, input.model, input.baseUrl.replace(/\/$/, ""));
+      if (!check.ok) return Response.json({ error: check.reason }, { status: 422 });
+      const paidId = await addPaidProvider(user, input);
+      // Nothing usable on OpenRouter yet: the new provider starts writing right away.
+      const openRouterReady = saved.keys.some((key) => key.secret && key.status !== "rejected");
+      if (!openRouterReady && saved.active === OPENROUTER_SOURCE) await saveActiveSource(user, `paid:${paidId}`);
+      await audit(user.id, "AI_PAID_PROVIDER_ADDED", "IntegrationSetting", paidId, null, { name: input.name, baseUrl: input.baseUrl, model: input.model, hint: input.apiKey.slice(-4) });
+      return Response.json({ status: await readAiKeyStatus(), check: checkInfo(check) });
+    }
+
+    if (input.action === "paid-model") {
+      const paid = saved.paid.find((p) => p.id === input.id);
+      if (!paid) return gone("Penyedia");
+      if (!paid.apiKey) return Response.json({ error: "Kunci penyedia ini tidak bisa dibaca lagi. Hapus lalu tambahkan ulang." }, { status: 409 });
+      await savePaidModel(user, paid, input.model);
+      await audit(user.id, "AI_PAID_MODEL_CHANGED", "IntegrationSetting", input.id, null, { model: input.model });
+      return Response.json({ status: await readAiKeyStatus() });
+    }
+
+    if (input.action === "paid-remove" || input.action === "paid-reset") {
+      if (!saved.paid.some((p) => p.id === input.id)) return gone("Penyedia");
+      if (input.action === "paid-remove") {
+        await removePaidProvider(input.id);
+        if (saved.active === `paid:${input.id}`) await saveActiveSource(user, OPENROUTER_SOURCE);
+      } else await resetPaidProvider(input.id);
+      await audit(user.id, input.action === "paid-remove" ? "AI_PAID_PROVIDER_REMOVED" : "AI_PAID_PROVIDER_RESET", "IntegrationSetting", input.id, null, {});
+      return Response.json({ status: await readAiKeyStatus() });
+    }
+
+    if (input.action === "active") {
+      if (input.source !== OPENROUTER_SOURCE && !saved.paid.some((p) => `paid:${p.id}` === input.source)) return gone("Penyedia");
+      await saveActiveSource(user, input.source);
+      await audit(user.id, "AI_ACTIVE_SOURCE_CHANGED", "IntegrationSetting", "ai.active", null, { source: input.source });
       return Response.json({ status: await readAiKeyStatus() });
     }
 
     if (input.action === "keymodel") {
-      if (!saved.keys.some((key) => key.id === input.id)) return Response.json({ error: "Kunci itu sudah tidak ada. Muat ulang halaman." }, { status: 404 });
+      if (!saved.keys.some((key) => key.id === input.id)) return gone("Kunci");
       await saveAiKeyModel(user, input.id, input.model);
       await audit(user.id, "AI_KEY_MODEL_CHANGED", "IntegrationSetting", input.id, null, { model: input.model });
       return Response.json({ status: await readAiKeyStatus() });
@@ -112,7 +157,7 @@ export async function POST(request: Request) {
       return Response.json({ status: await readAiKeyStatus() });
     }
 
-    if (!saved.keys.some((key) => key.id === input.id)) return Response.json({ error: "Kunci itu sudah tidak ada. Muat ulang halaman." }, { status: 404 });
+    if (!saved.keys.some((key) => key.id === input.id)) return gone("Kunci");
     if (input.action === "remove") await removeAiKey(input.id);
     else if (input.action === "primary") await makePrimary(input.id);
     else await resetAiKey(input.id);
@@ -121,7 +166,7 @@ export async function POST(request: Request) {
   } catch (error) { return tooMany(error) ?? jsonError(error); }
 }
 
-/** Forgets every dashboard key and the model; the server environment key (if any) is used again. */
+/** Forgets every dashboard key, paid provider and model; the server environment key (if any) is used again. */
 export async function DELETE(request: Request) {
   try {
     const user = await owner(request, true);

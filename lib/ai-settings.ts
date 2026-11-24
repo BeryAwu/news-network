@@ -6,9 +6,12 @@ const KEY_PREFIX = "ai.key.";
 const KEY_MODEL = "ai.model";
 const KEY_MODEL_PREFIX = "ai.keymodel.";
 const KEY_FREE_MODELS = "ai.freeModels";
-const KEY_PROVIDER = "ai.provider";
-const KEY_BASE_URL = "ai.baseUrl";
 const KEY_INDEX = "ai.keyIndex";
+/** One row per paid provider; `value` is encrypted JSON {apiKey, baseUrl, model}, `label` is its name. */
+const PAID_PREFIX = "ai.paid.";
+/** "openrouter" or "paid:<id>": the source tried first. The others are backups. */
+const KEY_ACTIVE = "ai.active";
+export const OPENROUTER_SOURCE = "openrouter";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-235b-a22b-2507";
@@ -31,17 +34,41 @@ export interface StoredAiKey {
   model: string | null;
 }
 
-export interface AiSettings { keys: StoredAiKey[]; model: string | null; provider: string | null; baseUrl: string | null; freeModels: string[] }
+/** A paid OpenAI-compatible provider: its own base URL, one key, and a model the owner typed. `apiKey` is null when it can no longer be decrypted. */
+export interface StoredPaidProvider {
+  id: string;
+  name: string;
+  hint: string;
+  apiKey: string | null;
+  baseUrl: string;
+  model: string;
+  status: KeyStatus;
+  cooldownUntil: Date | null;
+  lastError: string;
+  lastUsedAt: Date | null;
+  position: number;
+}
 
-const EMPTY: AiSettings = { keys: [], model: null, provider: null, baseUrl: null, freeModels: [] };
+/** `keys` and `model` belong to the OpenRouter pool; `paid` are the other providers; `active` picks which one goes first. */
+export interface AiSettings { keys: StoredAiKey[]; model: string | null; freeModels: string[]; paid: StoredPaidProvider[]; active: string }
+
+const EMPTY: AiSettings = { keys: [], model: null, freeModels: [], paid: [], active: OPENROUTER_SOURCE };
+
+function readPaid(row: { key: string; value: string; label: string; hint: string; status: string; cooldownUntil: Date | null; lastError: string; lastUsedAt: Date | null; position: number }): StoredPaidProvider {
+  let config: { apiKey?: string; baseUrl?: string; model?: string } = {};
+  try { config = JSON.parse(decryptSecret(row.value) ?? "{}"); } catch { /* unreadable: shown as such */ }
+  return { id: row.key.slice(PAID_PREFIX.length), name: row.label, hint: row.hint, apiKey: config.apiKey ?? null, baseUrl: config.baseUrl ?? "", model: config.model ?? "", status: (row.status as KeyStatus) || "ok", cooldownUntil: row.cooldownUntil, lastError: row.lastError, lastUsedAt: row.lastUsedAt, position: row.position };
+}
 
 /** Read fresh on every call, so a change is used by the very next request in any process. Never throws. */
 export async function readAiSettings(): Promise<AiSettings> {
   try {
-    const rows = await db.integrationSetting.findMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: { startsWith: KEY_MODEL_PREFIX } }, { key: KEY_MODEL }, { key: KEY_FREE_MODELS }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
+    const rows = await db.integrationSetting.findMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: { startsWith: KEY_MODEL_PREFIX } }, { key: { startsWith: PAID_PREFIX } }, { key: KEY_MODEL }, { key: KEY_FREE_MODELS }, { key: KEY_ACTIVE }] } });
     const modelRow = rows.find((row) => row.key === KEY_MODEL);
-    const providerRow = rows.find((row) => row.key === KEY_PROVIDER);
-    const baseUrlRow = rows.find((row) => row.key === KEY_BASE_URL);
+    const paid = rows.filter((row) => row.key.startsWith(PAID_PREFIX)).map(readPaid).sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+    const activeValue = rows.find((row) => row.key === KEY_ACTIVE)?.value ?? OPENROUTER_SOURCE;
+    // A paid provider that was deleted falls back to OpenRouter.
+    const active = activeValue.startsWith("paid:") && paid.some((p) => `paid:${p.id}` === activeValue) ? activeValue : OPENROUTER_SOURCE;
     const freeModelsRow = rows.find((row) => row.key === KEY_FREE_MODELS);
     const freeModels: string[] = freeModelsRow ? JSON.parse(decryptSecret(freeModelsRow.value) ?? "[]") : [];
     const keyModelMap = new Map(rows.filter((row) => row.key.startsWith(KEY_MODEL_PREFIX)).map((row) => [row.key.slice(KEY_MODEL_PREFIX.length), decryptSecret(row.value)]));
@@ -49,7 +76,7 @@ export async function readAiSettings(): Promise<AiSettings> {
       .filter((row) => row.key.startsWith(KEY_PREFIX))
       .map((row): StoredAiKey => ({ id: row.key.slice(KEY_PREFIX.length), label: row.label, hint: row.hint, secret: decryptSecret(row.value), status: (row.status as KeyStatus) || "ok", cooldownUntil: row.cooldownUntil, lastError: row.lastError, lastUsedAt: row.lastUsedAt, position: row.position, addedByName: row.updatedByName, model: keyModelMap.get(row.key.slice(KEY_PREFIX.length)) ?? null }))
       .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
-    return { keys, model: modelRow ? decryptSecret(modelRow.value) : null, provider: providerRow ? decryptSecret(providerRow.value) : null, baseUrl: baseUrlRow ? decryptSecret(baseUrlRow.value) : null, freeModels };
+    return { keys, model: modelRow ? decryptSecret(modelRow.value) : null, freeModels, paid, active };
   } catch { return EMPTY; }
 }
 
@@ -82,14 +109,19 @@ export async function addAiKeysBulk(by: { name: string }, apiKeys: string[]): Pr
   return toAdd.length;
 }
 
-/** Atomically increments round-robin index and returns the next usable key. Never throws. */
-export async function roundRobinKey(keys: StoredAiKey[]): Promise<StoredAiKey | null> {
+/**
+ * The key whose turn it is. `advance` moves the turn on (one AI request); without it the current turn is only read,
+ * so showing settings or status pages never shifts the rotation. Never throws.
+ */
+export async function roundRobinKey(keys: StoredAiKey[], advance = false): Promise<StoredAiKey | null> {
   const usable = keys.filter((k) => k.secret && k.status !== "rejected");
   if (!usable.length) return null;
   try {
-    const row = await db.integrationSetting.upsert({ where: { key: KEY_INDEX }, create: { key: KEY_INDEX, value: "0", updatedByName: "system" }, update: { value: String((parseInt((await db.integrationSetting.findUnique({ where: { key: KEY_INDEX } }))?.value ?? "0", 10) + 1) % usable.length) } });
-    const idx = parseInt(row.value, 10) % usable.length;
-    return usable[idx];
+    const current = parseInt((await db.integrationSetting.findUnique({ where: { key: KEY_INDEX } }))?.value ?? "0", 10) || 0;
+    if (!advance) return usable[current % usable.length];
+    const next = (current + 1) % usable.length;
+    await db.integrationSetting.upsert({ where: { key: KEY_INDEX }, create: { key: KEY_INDEX, value: String(next), updatedByName: "system" }, update: { value: String(next) } });
+    return usable[next];
   } catch { return usable[0]; }
 }
 
@@ -122,16 +154,39 @@ export async function saveAiModel(by: { name: string }, model: string) {
   await db.integrationSetting.upsert({ where: { key: KEY_MODEL }, create: { key: KEY_MODEL, value: encryptSecret(model), updatedByName: by.name }, update: { value: encryptSecret(model), updatedByName: by.name } });
 }
 
-export async function saveAiProvider(by: { name: string }, provider: string, baseUrl: string) {
-  await db.$transaction([
-    db.integrationSetting.upsert({ where: { key: KEY_PROVIDER }, create: { key: KEY_PROVIDER, value: encryptSecret(provider), updatedByName: by.name }, update: { value: encryptSecret(provider), updatedByName: by.name } }),
-    db.integrationSetting.upsert({ where: { key: KEY_BASE_URL }, create: { key: KEY_BASE_URL, value: encryptSecret(baseUrl), updatedByName: by.name }, update: { value: encryptSecret(baseUrl), updatedByName: by.name } }),
-  ]);
+export interface PaidProviderInput { name: string; baseUrl: string; apiKey: string; model: string }
+
+const paidValue = (input: { apiKey: string; baseUrl: string; model: string }) => encryptSecret(JSON.stringify({ apiKey: input.apiKey, baseUrl: input.baseUrl.replace(/\/$/, ""), model: input.model }));
+
+export async function addPaidProvider(by: { name: string }, input: PaidProviderInput) {
+  const existing = await db.integrationSetting.findMany({ where: { key: { startsWith: PAID_PREFIX } }, select: { position: true } });
+  const id = randomBytes(6).toString("hex");
+  await db.integrationSetting.create({ data: { key: PAID_PREFIX + id, value: paidValue(input), hint: input.apiKey.slice(-4), label: input.name.trim().slice(0, 40), position: existing.length ? Math.max(...existing.map((row) => row.position)) + 1 : 0, updatedByName: by.name } });
+  return id;
 }
 
-/** Forgets every dashboard key and the model; the server environment takes over again. */
+/** Changes the model of a paid provider; key and URL stay. */
+export async function savePaidModel(by: { name: string }, provider: StoredPaidProvider, model: string) {
+  if (!provider.apiKey) throw new Error("Paid provider key is unreadable.");
+  await db.integrationSetting.update({ where: { key: PAID_PREFIX + provider.id }, data: { value: paidValue({ apiKey: provider.apiKey, baseUrl: provider.baseUrl, model }), updatedByName: by.name } });
+}
+
+export async function removePaidProvider(id: string) {
+  await db.integrationSetting.deleteMany({ where: { key: PAID_PREFIX + id } });
+}
+
+export async function resetPaidProvider(id: string) {
+  await db.integrationSetting.update({ where: { key: PAID_PREFIX + id }, data: { status: "ok", cooldownUntil: null, lastError: "" } });
+}
+
+/** `source` is "openrouter" or "paid:<id>". Not secret, so stored as plain text. */
+export async function saveActiveSource(by: { name: string }, source: string) {
+  await db.integrationSetting.upsert({ where: { key: KEY_ACTIVE }, create: { key: KEY_ACTIVE, value: source, updatedByName: by.name }, update: { value: source, updatedByName: by.name } });
+}
+
+/** Forgets every dashboard key, paid provider and model; the server environment takes over again. */
 export async function clearAiSettings() {
-  await db.integrationSetting.deleteMany({ where: { OR: [{ key: { startsWith: KEY_PREFIX } }, { key: { startsWith: KEY_MODEL_PREFIX } }, { key: KEY_MODEL }, { key: KEY_FREE_MODELS }, { key: KEY_PROVIDER }, { key: KEY_BASE_URL }] } });
+  await db.integrationSetting.deleteMany({ where: { key: { startsWith: "ai." } } });
 }
 
 const HOUR = 60 * 60 * 1000;
@@ -144,15 +199,19 @@ export function keyConsequence(status: number, now = new Date()): { status: KeyS
   return null;
 }
 
-/** Best effort: a bookkeeping failure must never break the article being written. */
+/**
+ * Best effort: a bookkeeping failure must never break the article being written.
+ * `id` is an OpenRouter key id, or "paid:<id>" for a paid provider.
+ */
 export async function recordKeyOutcome(id: string, outcome: { ok: true } | { httpStatus: number }) {
+  const key = id.startsWith("paid:") ? PAID_PREFIX + id.slice(5) : KEY_PREFIX + id;
   try {
     if ("ok" in outcome) {
-      await db.integrationSetting.updateMany({ where: { key: KEY_PREFIX + id }, data: { status: "ok", cooldownUntil: null, lastError: "", lastUsedAt: new Date() } });
+      await db.integrationSetting.updateMany({ where: { key }, data: { status: "ok", cooldownUntil: null, lastError: "", lastUsedAt: new Date() } });
       return;
     }
     const consequence = keyConsequence(outcome.httpStatus);
-    if (consequence) await db.integrationSetting.updateMany({ where: { key: KEY_PREFIX + id }, data: consequence });
+    if (consequence) await db.integrationSetting.updateMany({ where: { key }, data: consequence });
   } catch { /* ignored on purpose */ }
 }
 
@@ -173,10 +232,17 @@ export async function listAiModels(apiKey: string, baseUrl: string): Promise<Mod
     const body = await response.json() as unknown;
     const rows = Array.isArray(body) ? body as unknown[] : ((body as { data?: unknown }).data as unknown[] | undefined);
     if (!Array.isArray(rows)) return { ok: false, reason: "Penyedia tidak mengembalikan daftar model yang bisa dibaca." };
+    // Free backups must write text: OpenRouter also lists free music/image models that always fail on a chat request.
+    const writesText = (row: unknown) => {
+      const arch = (row as { architecture?: { output_modalities?: unknown; modality?: unknown } }).architecture;
+      if (Array.isArray(arch?.output_modalities)) return arch.output_modalities.length > 0 && arch.output_modalities.every((m) => m === "text");
+      if (typeof arch?.modality === "string") return arch.modality.endsWith("->text");
+      return true;
+    };
     const isFree = (row: unknown) => {
       const p = (row as { pricing?: Record<string, unknown> }).pricing;
       if (!p) return false;
-      return String(p.prompt ?? "1") === "0" && String(p.completion ?? "1") === "0";
+      return String(p.prompt ?? "1") === "0" && String(p.completion ?? "1") === "0" && writesText(row);
     };
     const toId = (row: unknown): string | null => {
       const id = typeof row === "string" ? row : (row as { id?: unknown }).id;

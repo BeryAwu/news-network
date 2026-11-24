@@ -5,18 +5,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUp, CircleAlert, CircleCheck, Download, Eye, EyeOff, KeyRound, RotateCcw, Trash2 } from "lucide-react";
 import type { AiKeyStatus, AiKeyView } from "@/lib/ai-status";
+import AiPaidProviders, { type Notice } from "@/components/ai-paid-providers";
 
 interface CheckResult { label: string; limit: number | null; remaining: number | null }
-type Notice = { tone: "success" | "error"; text: string; inModel?: boolean } | null;
 
-interface ModelCatalogue { baseUrl: string; models: string[]; freeIds: Set<string> }
+interface ModelCatalogue { models: string[]; freeIds: Set<string> }
 const MODEL_BATCH = 24;
-
-const PROVIDERS: { value: string; label: string; defaultBaseUrl: string; hint: string }[] = [
-  { value: "openrouter", label: "OpenRouter", defaultBaseUrl: "https://openrouter.ai/api/v1", hint: "Salin dari openrouter.ai/settings/keys." },
-  { value: "openai-compatible", label: "OpenAI-compatible (ngodeai, LiteLLM, dll.)", defaultBaseUrl: "https://llm.ngodeai.net/v1", hint: "Gunakan base URL dari dashboard penyedia." },
-  { value: "openai", label: "OpenAI", defaultBaseUrl: "https://api.openai.com/v1", hint: "Salin dari platform.openai.com/api-keys." },
-];
+const OPENROUTER = "openrouter";
 
 const when = new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" });
 
@@ -38,14 +33,16 @@ function keyState(key: AiKeyView, isFirst: boolean) {
   return { tone: "ok", text: isFirst ? "Dipakai pertama" : "Siaga, dipakai kalau kunci di atasnya gagal" };
 }
 
+/** Where a request's message shows: next to the OpenRouter model picker, in the paid section, or at the bottom. */
+const scopeOf = (kind: string): "model" | "paid" | undefined =>
+  kind.startsWith("paid") ? "paid" : kind === "models" || kind === "model" ? "model" : undefined;
+
 export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   const router = useRouter();
   const [status, setStatus] = useState(initial);
   const [apiKey, setApiKey] = useState("");
   const [label, setLabel] = useState("");
   const [model, setModel] = useState("");
-  const [provider, setProvider] = useState(initial.provider || "openrouter");
-  const [baseUrl, setBaseUrl] = useState(initial.baseUrl || "");
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
@@ -56,41 +53,39 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   const [keyModels, setKeyModels] = useState<Record<string, string>>({});
   const [bulkKeys, setBulkKeys] = useState("");
 
-  const providerMeta = PROVIDERS.find((p) => p.value === provider) ?? PROVIDERS[0];
-  const effectiveBaseUrl = baseUrl.trim() || providerMeta.defaultBaseUrl;
-  const currentCatalogue = catalogue?.baseUrl === effectiveBaseUrl ? catalogue : null;
   const query = modelQuery.trim().toLowerCase();
-  const visibleModels = currentCatalogue
-    ? currentCatalogue.models
-        .filter((id) => (!freeOnly || currentCatalogue.freeIds.has(id)) && id.toLowerCase().includes(query))
-        .sort((a, b) => Number(currentCatalogue.freeIds.has(b)) - Number(currentCatalogue.freeIds.has(a)))
+  const visibleModels = catalogue
+    ? catalogue.models
+        .filter((id) => (!freeOnly || catalogue.freeIds.has(id)) && id.toLowerCase().includes(query))
+        .sort((a, b) => Number(catalogue.freeIds.has(b)) - Number(catalogue.freeIds.has(a)))
     : [];
   const candidate = model.trim();
 
   async function call(method: "POST" | "DELETE", body: unknown, kind: string) {
-    const inModel = kind === "models" || kind === "model";
+    const scope = scopeOf(kind);
     setBusy(kind);
     setNotice(null);
     try {
       const response = await fetch("/api/settings/ai", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      if (!response.ok) { setNotice({ tone: "error", text: await failureText(response), inModel }); return null; }
-      const data = await response.json() as { status?: AiKeyStatus; check?: CheckResult; models?: string[]; freeModels?: string[] };
+      if (!response.ok) { setNotice({ tone: "error", text: await failureText(response), scope }); return null; }
+      const data = await response.json() as { status?: AiKeyStatus; check?: CheckResult; models?: string[]; freeModels?: string[]; added?: number };
       if (data.status) {
         setStatus(data.status);
         router.refresh();
       }
       return data;
     } catch {
-      setNotice({ tone: "error", text: "Tidak bisa terhubung ke server. Periksa koneksi internet Anda, lalu coba lagi.", inModel });
+      setNotice({ tone: "error", text: "Tidak bisa terhubung ke server. Periksa koneksi internet Anda, lalu coba lagi.", scope });
       return null;
     } finally {
       setBusy(null);
     }
   }
 
-  async function saveProvider() {
-    const data = await call("POST", { action: "provider", provider, baseUrl: effectiveBaseUrl }, "provider");
-    if (data) setNotice({ tone: "success", text: `Penyedia disimpan: ${providerMeta.label} · ${effectiveBaseUrl}` });
+  async function chooseSource(source: string) {
+    if (source === status.active) return;
+    const data = await call("POST", { action: "active", source }, "active");
+    if (data) setNotice({ tone: "success", text: source === OPENROUTER ? "OpenRouter sekarang dipakai duluan. Penyedia berbayar jadi cadangan." : "Penyedia ini sekarang dipakai duluan. Sumber lain jadi cadangan." });
   }
 
   async function addBulk() {
@@ -99,19 +94,19 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
     const data = await call("POST", { action: "bulk", apiKeys: keys }, "bulk");
     if (data) {
       setBulkKeys("");
-      const added = (data as { added?: number }).added ?? 0;
+      const added = data.added ?? 0;
       if (data.models) {
-        setCatalogue({ baseUrl: effectiveBaseUrl, models: data.models, freeIds: new Set(data.freeModels ?? []) });
+        setCatalogue({ models: data.models, freeIds: new Set(data.freeModels ?? []) });
         setFreeOnly(true);
       }
-      const freeText = data.freeModels ? ` ${data.freeModels.length} model gratis siap sebagai cadangan otomatis — pilih model utama di langkah 03.` : "";
+      const freeText = data.freeModels ? ` ${data.freeModels.length} model gratis siap sebagai cadangan otomatis. Pilih model utama di bawah.` : "";
       setNotice({ tone: "success", text: `${added} kunci baru ditambahkan${added < keys.length ? `, ${keys.length - added} sudah ada sebelumnya` : ""}.${freeText}` });
     }
   }
 
   async function add() {
     if (!apiKey.trim()) { setNotice({ tone: "error", text: "Tempel kunci API dulu." }); return; }
-    const data = await call("POST", { action: "add", apiKey: apiKey.trim(), label: label.trim(), baseUrl: effectiveBaseUrl, model: model.trim() || undefined }, "add");
+    const data = await call("POST", { action: "add", apiKey: apiKey.trim(), label: label.trim(), model: model.trim() || undefined }, "add");
     if (!data) return;
     setApiKey("");
     setLabel("");
@@ -119,19 +114,19 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   }
 
   async function loadModels() {
-    const data = await call("POST", { action: "models", baseUrl: effectiveBaseUrl, apiKey: apiKey.trim() || undefined }, "models");
+    const data = await call("POST", { action: "models", apiKey: apiKey.trim() || undefined }, "models");
     if (data?.models) {
       const freeList: string[] = data.freeModels ?? [];
-      setCatalogue({ baseUrl: effectiveBaseUrl, models: data.models, freeIds: new Set(freeList) });
+      setCatalogue({ models: data.models, freeIds: new Set(freeList) });
       const freeCount = freeList.length;
-      setNotice({ tone: "success", text: `${data.models.length} model terbaca${freeCount ? ` · ${freeCount} gratis, dipakai otomatis kalau model utama lambat atau error` : ""}.`, inModel: true });
+      setNotice({ tone: "success", text: `${data.models.length} model terbaca${freeCount ? ` · ${freeCount} gratis, dipakai otomatis kalau model utama lambat atau error` : ""}.`, scope: "model" });
     }
   }
 
   async function saveModel() {
-    if (!model.trim()) { setNotice({ tone: "error", text: "Isi nama model dulu." }); return; }
+    if (!model.trim()) { setNotice({ tone: "error", text: "Isi nama model dulu.", scope: "model" }); return; }
     const data = await call("POST", { action: "model", model: model.trim() }, "model");
-    if (data) { setModel(""); setNotice({ tone: "success", text: "Model disimpan." }); }
+    if (data) { setModel(""); setNotice({ tone: "success", text: "Model disimpan.", scope: "model" }); }
   }
 
   async function saveKeyModel(key: AiKeyView) {
@@ -143,8 +138,8 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
 
   async function check() {
     const data = await call("POST", { action: "check" }, "check");
-    if (data?.check) setNotice({ tone: "success", text: `Tersambung. Kunci yang dipakai sekarang berfungsi. ${creditText(data.check)}` });
-    else if (data) setNotice({ tone: "success", text: "Tersambung. Kunci yang dipakai sekarang berfungsi." });
+    if (data?.check) setNotice({ tone: "success", text: `Tersambung. Sumber yang dipakai sekarang berfungsi. ${creditText(data.check)}` });
+    else if (data) setNotice({ tone: "success", text: "Tersambung. Sumber yang dipakai sekarang berfungsi." });
   }
 
   async function act(action: "remove" | "primary" | "reset", key: AiKeyView) {
@@ -158,52 +153,50 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
   async function clearAll() {
     setConfirm(null);
     const data = await call("DELETE", {}, "clear");
-    if (data) setNotice({ tone: "success", text: data.status?.source === "env" ? "Semua kunci dashboard dihapus. Aplikasi kembali memakai kunci dari server." : "Semua kunci dashboard dihapus. Pasang kunci baru agar penulisan AI bisa dipakai." });
+    if (data) setNotice({ tone: "success", text: data.status?.source === "env" ? "Semua kunci dan penyedia dashboard dihapus. Aplikasi kembali memakai kunci dari server." : "Semua kunci dan penyedia dashboard dihapus. Pasang kunci baru agar penulisan AI bisa dipakai." });
   }
 
-  const hasReady = status.keys.some((key) => !key.unreadable && key.status !== "rejected");
-  const unreadable = status.keys.some((key) => key.unreadable);
+  const readyKeys = status.keys.filter((key) => !key.unreadable && key.status !== "rejected").length;
+  const readyPaid = status.paid.some((p) => !p.unreadable && p.status !== "rejected");
+  const unreadable = status.keys.some((key) => key.unreadable) || status.paid.some((p) => p.unreadable);
+  const hasDashboard = status.keys.length > 0 || status.paid.length > 0;
 
   return (
     <section className="card stack ai-key" aria-labelledby="ai-key-title">
       <div className="stack-sm">
         <h2 id="ai-key-title"><KeyRound size={22} aria-hidden="true" /> Kunci AI</h2>
-        <p className="muted">Pilih penyedia dan tambahkan kunci API. Kalau kredit satu kunci habis atau kena batas, aplikasi otomatis pindah ke kunci berikutnya. Anda tidak perlu menyentuh pengaturan server.</p>
+        <p className="muted">Dua jenis sumber: OpenRouter (banyak kunci, bergiliran, ada model gratis) dan penyedia berbayar (satu kunci per penyedia). Pilih mana yang dipakai duluan; sumber lain otomatis jadi cadangan kalau yang aktif gagal.</p>
       </div>
 
       <dl className="ai-key-status">
-        <div><dt>Penyedia</dt><dd>{status.provider || "belum dipilih"}</dd></div>
-        <div><dt>Base URL</dt><dd>{status.baseUrl || "belum disetel"}</dd></div>
+        <div><dt>Mulai dari</dt><dd>{status.provider || "belum ada"}</dd></div>
         <div><dt>Model</dt><dd>{status.model || "belum dipilih"}</dd></div>
         <div><dt>Kunci cadangan dari server</dt><dd>{status.envKey ? "Ada, dipakai paling akhir" : "Tidak ada"}</dd></div>
         {status.testMode && <div><dt>Mode</dt><dd>Mode uji (bukan AI sungguhan)</dd></div>}
       </dl>
 
-      {unreadable && <div className="notice notice-warn" role="alert"><CircleAlert size={20} aria-hidden="true" /><span>Ada kunci yang tidak bisa dibaca lagi (kunci rahasia server berubah). Hapus kunci itu lalu tempel lagi.</span></div>}
-      {!hasReady && !status.envKey && !status.testMode && <div className="notice notice-warn" role="alert"><CircleAlert size={20} aria-hidden="true" /><span>Belum ada kunci yang bisa dipakai. Penulisan AI belum berjalan sampai Anda menambah kunci.</span></div>}
+      {unreadable && <div className="notice notice-warn" role="alert"><CircleAlert size={20} aria-hidden="true" /><span>Ada kunci yang tidak bisa dibaca lagi (kunci rahasia server berubah). Hapus lalu tempel lagi.</span></div>}
+      {!readyKeys && !readyPaid && !status.envKey && !status.testMode && <div className="notice notice-warn" role="alert"><CircleAlert size={20} aria-hidden="true" /><span>Belum ada kunci yang bisa dipakai. Penulisan AI belum berjalan sampai Anda menambah kunci OpenRouter atau penyedia berbayar.</span></div>}
 
-      <details className="ai-setup-section" open={!status.provider}>
-        <summary><span><strong>01</strong> Penyedia API</span><small>{status.provider || "Belum disetel"}</small></summary>
-        <div className="stack-sm ai-setup-content">
-          <div className="field">
-            <label htmlFor="ai-provider-select">Penyedia</label>
-            <select id="ai-provider-select" value={provider} onChange={(e) => { setProvider(e.target.value); setBaseUrl(""); }}>
-              {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-            </select>
-          </div>
-          <div className="field">
-            <label htmlFor="ai-base-url-input">Base URL</label>
-            <input id="ai-base-url-input" type="url" autoComplete="off" spellCheck={false} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={providerMeta.defaultBaseUrl} />
-            <span className="field-help">Kosongkan untuk memakai default: <code>{providerMeta.defaultBaseUrl}</code></span>
-          </div>
-          <div className="actions">
-            <button type="button" className="btn" disabled={busy !== null} onClick={saveProvider}>{busy === "provider" ? "Menyimpan…" : "Simpan penyedia"}</button>
-          </div>
-        </div>
-      </details>
+      <fieldset className="ai-source-picker">
+        <legend>Sumber aktif</legend>
+        <label className={status.active === OPENROUTER ? "is-active" : ""}>
+          <input type="radio" name="ai-source" value={OPENROUTER} checked={status.active === OPENROUTER} disabled={busy !== null} onChange={() => void chooseSource(OPENROUTER)} />
+          <span><strong>OpenRouter</strong><small>{readyKeys} kunci siap · {status.openRouterModel || "model belum dipilih"}</small></span>
+        </label>
+        {status.paid.map((p) => (
+          <label key={p.id} className={status.active === `paid:${p.id}` ? "is-active" : ""}>
+            <input type="radio" name="ai-source" value={`paid:${p.id}`} checked={status.active === `paid:${p.id}`} disabled={busy !== null || p.unreadable} onChange={() => void chooseSource(`paid:${p.id}`)} />
+            <span><strong>{p.name}</strong><small>Berbayar · {p.model}</small></span>
+          </label>
+        ))}
+        {!status.paid.length && <p className="field-help">Tambah penyedia berbayar di bawah untuk memakai API di luar OpenRouter.</p>}
+      </fieldset>
+
+      <h3 className="ai-source-title">OpenRouter</h3>
 
       <section className="ai-setup-section ai-key-entry" aria-labelledby="ai-key-entry-title">
-        <div className="ai-setup-section-heading"><div><h3 id="ai-key-entry-title"><strong>02</strong> Kunci API</h3><p>Kunci dipakai bergantian otomatis per request (round-robin). Tambah banyak kunci sekaligus untuk menghindari limit.</p></div><span>{status.keys.length} tersimpan</span></div>
+        <div className="ai-setup-section-heading"><div><h3 id="ai-key-entry-title"><strong>01</strong> Kunci OpenRouter</h3><p>Kunci dipakai bergantian otomatis per request (round-robin). Tambah banyak kunci sekaligus untuk menghindari limit.</p></div><span>{status.keys.length} tersimpan</span></div>
         {status.keys.length > 0 && <ol className="ai-key-list" aria-label="Daftar kunci, dicoba dari atas ke bawah">
           {status.keys.map((key, index) => {
             const state = keyState(key, index === 0);
@@ -215,7 +208,7 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
                   type="text" className="ai-key-model-input" autoComplete="off" spellCheck={false}
                   value={keyModels[key.id] ?? key.model ?? ""}
                   onChange={(e) => setKeyModels((prev) => ({ ...prev, [key.id]: e.target.value }))}
-                  placeholder={status.model || "Model (opsional, kosong = pakai global)"}
+                  placeholder={status.openRouterModel || "Model (opsional, kosong = pakai model OpenRouter)"}
                   aria-label={`Model untuk kunci ${key.label || key.hint}`}
                 />
                 <button type="button" className="btn btn-sm" disabled={busy !== null || !(keyModels[key.id] ?? key.model)} onClick={() => saveKeyModel(key)}>
@@ -239,32 +232,35 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
           </div>
         </div>
         <div className="field">
-        <label htmlFor="ai-key-input">Atau tambah satu kunci (dengan uji)</label>
-        <div className="password-wrap">
-          <input id="ai-key-input" type={show ? "text" : "password"} autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={providerMeta.hint.split(".")[0] + "…"} />
-          <button type="button" className="password-toggle" aria-label={show ? "Sembunyikan kunci" : "Tampilkan kunci"} aria-pressed={show} onClick={() => setShow((value) => !value)}>
-            {show ? <EyeOff size={20} aria-hidden="true" /> : <Eye size={20} aria-hidden="true" />}
-          </button>
+          <label htmlFor="ai-key-input">Atau tambah satu kunci (dengan uji)</label>
+          <div className="password-wrap">
+            <input id="ai-key-input" type={show ? "text" : "password"} autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-or-v1-…" />
+            <button type="button" className="password-toggle" aria-label={show ? "Sembunyikan kunci" : "Tampilkan kunci"} aria-pressed={show} onClick={() => setShow((value) => !value)}>
+              {show ? <EyeOff size={20} aria-hidden="true" /> : <Eye size={20} aria-hidden="true" />}
+            </button>
+          </div>
+          <span className="field-help">Salin dari openrouter.ai/settings/keys. Kunci baru masuk daftar paling bawah setelah lolos uji.</span>
         </div>
-        <span className="field-help">{providerMeta.hint} Kunci baru masuk daftar paling bawah setelah lolos uji.</span>
-      </div>
-      <div className="field">
-        <label htmlFor="ai-key-label">Nama kunci (opsional)</label>
-        <input id="ai-key-label" type="text" autoComplete="off" maxLength={40} value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Contoh: Akun cadangan" />
-      </div>
+        <div className="field">
+          <label htmlFor="ai-key-label">Nama kunci (opsional)</label>
+          <input id="ai-key-label" type="text" autoComplete="off" maxLength={40} value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Contoh: Akun cadangan" />
+        </div>
+        <div className="actions">
+          <button type="button" className="btn" disabled={busy !== null || !apiKey.trim()} onClick={add}>{busy === "add" ? "Menguji ke OpenRouter…" : "Tambah dan uji kunci"}</button>
+        </div>
       </section>
 
-      <details className="ai-setup-section" open={Boolean(status.model)}>
-        <summary><span><strong>03</strong> Model</span><small>{status.model ? status.model : status.freeModelCount > 0 ? `Otomatis (${status.freeModelCount} model gratis)` : "Belum dipilih"}</small></summary>
+      <details className="ai-setup-section" open={Boolean(status.openRouterModel)}>
+        <summary><span><strong>02</strong> Model OpenRouter</span><small>{status.openRouterModel || "Belum dipilih"}{status.freeModelCount > 0 ? ` · ${status.freeModelCount} gratis cadangan` : ""}</small></summary>
         <div className="ai-setup-content">
           <div className="model-picker">
             <div className="model-picker-toolbar">
-              <input id="ai-model-input" className="model-picker-search" type="text" autoComplete="off" spellCheck={false} value={candidate || modelQuery} onChange={(e) => { setModel(e.target.value); setModelQuery(e.target.value); }} placeholder={status.model || "Ketik atau cari nama model…"} aria-label="Nama model" />
-              <button type="button" className="btn" disabled={busy !== null} onClick={() => void loadModels()} title="Ambil daftar dari penyedia">{busy === "models" ? "Mengambil…" : <><Download size={15} aria-hidden="true" /> Import dari /models</>}</button>
+              <input id="ai-model-input" className="model-picker-search" type="text" autoComplete="off" spellCheck={false} value={candidate || modelQuery} onChange={(e) => { setModel(e.target.value); setModelQuery(e.target.value); }} placeholder={status.openRouterModel || "Ketik atau cari nama model…"} aria-label="Nama model" />
+              <button type="button" className="btn" disabled={busy !== null} onClick={() => void loadModels()} title="Ambil daftar dari OpenRouter">{busy === "models" ? "Mengambil…" : <><Download size={15} aria-hidden="true" /> Import dari /models</>}</button>
             </div>
-            {currentCatalogue && (
+            {catalogue && (
               <div className="model-picker-filters">
-                <span className="model-picker-count">{currentCatalogue.models.length} model · {currentCatalogue.freeIds.size} gratis</span>
+                <span className="model-picker-count">{catalogue.models.length} model · {catalogue.freeIds.size} gratis</span>
                 <button type="button" className={`btn btn-sm${freeOnly ? " btn-active" : ""}`} onClick={() => { setFreeOnly((v) => !v); setModelQuery(""); }}>{freeOnly ? "✓ Gratis" : "Gratis saja"}</button>
                 {modelQuery && <button type="button" className="btn btn-sm btn-quiet" onClick={() => { setModelQuery(""); setModel(""); }}>Hapus pencarian</button>}
               </div>
@@ -274,15 +270,15 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
                 {visibleModels.slice(0, MODEL_BATCH).map((id) => (
                   <li key={id} role="option" aria-selected={candidate === id} className={`model-picker-item${candidate === id ? " is-selected" : ""}`} onClick={() => { setModel(id); setModelQuery(""); }}>
                     <span className="model-picker-id">{id}</span>
-                    {currentCatalogue?.freeIds.has(id) && <span className="model-picker-free">gratis</span>}
+                    {catalogue?.freeIds.has(id) && <span className="model-picker-free">gratis</span>}
                   </li>
                 ))}
                 {visibleModels.length > MODEL_BATCH && <li className="model-picker-more">+{visibleModels.length - MODEL_BATCH} lainnya — ketik untuk menyaring</li>}
               </ul>
             )}
-            {currentCatalogue && visibleModels.length === 0 && <p className="model-picker-empty">Tidak ada model yang cocok.</p>}
+            {catalogue && visibleModels.length === 0 && <p className="model-picker-empty">Tidak ada model yang cocok.</p>}
           </div>
-          {notice?.inModel && (
+          {notice?.scope === "model" && (
             <div className={notice.tone === "success" ? "notice notice-success" : "notice notice-error"} role={notice.tone === "success" ? "status" : "alert"}>
               {notice.tone === "success" ? <CircleCheck size={18} aria-hidden="true" /> : <CircleAlert size={18} aria-hidden="true" />}
               <span>{notice.text}</span>
@@ -291,11 +287,13 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
           <div className="actions">
             <button type="button" className="btn btn-primary" disabled={busy !== null || !candidate} onClick={saveModel}>{busy === "model" ? "Menyimpan…" : "Simpan model"}</button>
           </div>
-          <span className="field-help">Gunakan nama persis dari katalog penyedia, termasuk prefix — misal <code>ngodeai/glm-5.3-flash</code>.</span>
+          <span className="field-help">Gunakan nama persis dari katalog OpenRouter, termasuk prefix — misal <code>qwen/qwen3-32b</code>.</span>
         </div>
       </details>
 
-      {notice && !notice.inModel && (
+      <AiPaidProviders status={status} busy={busy} notice={notice} call={(body, kind) => call("POST", body, kind)} setNotice={setNotice} />
+
+      {notice && !notice.scope && (
         <div className={notice.tone === "success" ? "notice notice-success" : "notice notice-error"} role={notice.tone === "success" ? "status" : "alert"}>
           {notice.tone === "success" ? <CircleCheck size={20} aria-hidden="true" /> : <CircleAlert size={20} aria-hidden="true" />}
           <span>{notice.text}</span>
@@ -303,16 +301,15 @@ export default function AiKeyForm({ initial }: { initial: AiKeyStatus }) {
       )}
 
       <div className="actions">
-        <button type="button" className="btn btn-primary" disabled={busy !== null} onClick={add}>{busy === "add" ? "Menguji ke penyedia…" : "Tambah dan uji kunci"}</button>
-        <button type="button" className="btn" disabled={busy !== null || (!status.configured && !status.testMode)} onClick={check}>{busy === "check" ? "Memeriksa…" : "Cek koneksi sekarang"}</button>
-        {status.keys.length > 0 && confirm !== "all" && <button type="button" className="btn btn-quiet" disabled={busy !== null} onClick={() => setConfirm("all")}>Hapus semua kunci dashboard</button>}
+        <button type="button" className="btn" disabled={busy !== null || (!status.configured && !status.testMode)} onClick={check}>{busy === "check" ? "Memeriksa…" : "Cek koneksi sumber aktif"}</button>
+        {hasDashboard && confirm !== "all" && <button type="button" className="btn btn-quiet" disabled={busy !== null} onClick={() => setConfirm("all")}>Hapus semua kunci dashboard</button>}
       </div>
 
       {confirm === "all" && (
         <div className="notice notice-warn" role="alert">
           <CircleAlert size={20} aria-hidden="true" />
           <div className="stack-sm">
-            <span>Semua kunci dari dashboard dihapus dan aplikasi kembali memakai kunci dari server, kalau ada. Lanjutkan?</span>
+            <span>Semua kunci OpenRouter dan penyedia berbayar dari dashboard dihapus, dan aplikasi kembali memakai kunci dari server, kalau ada. Lanjutkan?</span>
             <div className="actions">
               <button type="button" className="btn btn-danger btn-sm" disabled={busy !== null} onClick={clearAll}>Ya, hapus semua</button>
               <button type="button" className="btn btn-sm" onClick={() => setConfirm(null)}>Batal</button>

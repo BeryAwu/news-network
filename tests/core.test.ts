@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The dashboard key lives in the database; tests control it here instead of touching one.
 type FakeKey = { id: string; secret: string | null; status: "ok" | "cooldown" | "rejected"; cooldownUntil: Date | null };
-const saved = vi.hoisted(() => ({ keys: [] as FakeKey[], model: null as string | null, outcomes: [] as { id: string; outcome: unknown }[] }));
-vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiSettings: async () => ({ keys: saved.keys.map((key, position) => ({ label: "", hint: "", lastError: "", lastUsedAt: null, position, addedByName: "", ...key })), model: saved.model, provider: null, baseUrl: null, freeModels: [] }), roundRobinKey: async (keys: { secret: string | null; status: string }[]) => keys.find((k) => k.secret && k.status !== "rejected") ?? null, recordKeyOutcome: async (id: string, outcome: unknown) => { saved.outcomes.push({ id, outcome }); } }));
+type FakePaid = { id: string; name: string; apiKey: string | null; baseUrl: string; model: string; status: "ok" | "cooldown" | "rejected"; cooldownUntil: Date | null };
+const saved = vi.hoisted(() => ({ keys: [] as FakeKey[], model: null as string | null, paid: [] as FakePaid[], active: "openrouter", freeModels: [] as string[], outcomes: [] as { id: string; outcome: unknown }[] }));
+vi.mock("../lib/ai-settings", async (original) => ({ ...(await original<typeof import("../lib/ai-settings")>()), readAiSettings: async () => ({ keys: saved.keys.map((key, position) => ({ label: "", hint: "", lastError: "", lastUsedAt: null, position, addedByName: "", ...key })), model: saved.model, freeModels: saved.freeModels, paid: saved.paid.map((p, position) => ({ hint: "", lastError: "", lastUsedAt: null, position, ...p })), active: saved.active }), roundRobinKey: async (keys: { secret: string | null; status: string }[]) => keys.find((k) => k.secret && k.status !== "rejected") ?? null, recordKeyOutcome: async (id: string, outcome: unknown) => { saved.outcomes.push({ id, outcome }); } }));
 const key = (id: string, secret: string | null, extra: Partial<FakeKey> = {}): FakeKey => ({ id, secret, status: "ok", cooldownUntil: null, ...extra });
 import { aiConfiguration, articleDraftSchema, generateDraft, normalizeDraftOutput, plainAiFailure, validateDraftEvidence } from "../lib/ai";
 import { checkAiKey, listAiModels, OPENROUTER_BASE_URL } from "../lib/ai-settings";
@@ -257,7 +258,7 @@ describe("writing skills", () => {
 });
 
 describe("AI key managed from the dashboard", () => {
-  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); saved.keys = []; saved.model = null; saved.outcomes = []; });
+  afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); saved.keys = []; saved.model = null; saved.paid = []; saved.active = "openrouter"; saved.freeModels = []; saved.outcomes = []; });
   const draftJson = { title: "Judul berita uji untuk kunci", excerpt: "Ringkasan berita uji yang cukup panjang.", body: "Isi berita uji. ".repeat(20), suggestedCategory: "Umum", tags: [], seoTitle: "s", metaDescription: "m", slugSuggestion: "judul", imageBrief: "", claimsUsed: [], uncertainties: [] };
   const brief = { workingTitle: "Judul", narrative: "n", editorNotes: "", sourceSummary: null, references: [], facts: [] };
   const media = { displayName: "Berita", profile: { niche: "", targetAudience: "", editorialMission: "", toneGuidelines: "", styleGuidelines: "", language: "Indonesian", preferredWordCountMin: 350, preferredWordCountMax: 700 }, categories: [] };
@@ -319,6 +320,36 @@ describe("AI key managed from the dashboard", () => {
     expect(auths).toEqual(["Bearer good-key-good-2222", "Bearer resting-key-1111111", "Bearer env-key"]);
   });
 
+  it("starts with the active paid provider on its own URL and model, then falls back to OpenRouter without free models leaking to the paid API", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", ""); vi.stubEnv("AI_API_KEY", "");
+    saved.keys = [key("or", "openrouter-key-aaaa")]; saved.model = "qwen/qwen3-32b"; saved.freeModels = ["free/model-a"];
+    saved.paid = [{ id: "p1", name: "DeepSeek", apiKey: "paid-key-bbbbbbbbbb", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", status: "ok", cooldownUntil: null }];
+    saved.active = "paid:p1";
+    expect(await aiConfiguration()).toMatchObject({ provider: "DeepSeek", model: "deepseek-chat", baseUrl: "https://api.deepseek.com/v1" });
+    const seen: { url: string; auth: string; model: string }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      seen.push({ url, auth: String((init.headers as Record<string, string>).authorization), model: JSON.parse(String(init.body)).model });
+      return url.includes("deepseek") ? new Response("{}", { status: 503 }) : new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draftJson) } }] }));
+    }));
+    const result = await generateDraft(brief, media);
+    expect(result.provider).toBe("openrouter");
+    expect(seen).toEqual([
+      { url: "https://api.deepseek.com/v1/chat/completions", auth: "Bearer paid-key-bbbbbbbbbb", model: "deepseek-chat" },
+      { url: "https://openrouter.ai/api/v1/chat/completions", auth: "Bearer openrouter-key-aaaa", model: "qwen/qwen3-32b" },
+    ]);
+  });
+
+  it("uses OpenRouter first when it is the active source and keeps paid providers as backup", async () => {
+    vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", ""); vi.stubEnv("AI_API_KEY", "");
+    saved.keys = [key("or", "openrouter-key-aaaa")]; saved.model = "qwen/qwen3-32b";
+    saved.paid = [{ id: "p1", name: "DeepSeek", apiKey: "paid-key-bbbbbbbbbb", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", status: "ok", cooldownUntil: null }];
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => { urls.push(url); return url.includes("openrouter") ? new Response("{}", { status: 500 }) : new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draftJson) } }] })); }));
+    const result = await generateDraft(brief, media);
+    expect(result.provider).toBe("DeepSeek");
+    expect(urls).toEqual(["https://openrouter.ai/api/v1/chat/completions", "https://api.deepseek.com/v1/chat/completions"]);
+  });
+
   it("does not burn through keys for an error that is not about the key", async () => {
     vi.stubEnv("AI_TEST_ADAPTER", "false"); vi.stubEnv("AI_PROVIDER", "openrouter"); vi.stubEnv("AI_API_KEY", "");
     saved.keys = [key("a", "key-aaaa-aaaa-aaaa"), key("b", "key-bbbb-bbbb-bbbb")];
@@ -355,6 +386,17 @@ describe("AI key managed from the dashboard", () => {
     expect(await listAiModels("k", "https://x/v1")).toMatchObject({ ok: false, reason: expect.stringContaining("tidak mengenali") });
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ nope: true })));
     expect(await listAiModels("k", "https://x/v1")).toMatchObject({ ok: false, reason: expect.stringContaining("daftar model") });
+  });
+
+  it("keeps only free models that write text as automatic backups", async () => {
+    const free = { prompt: "0", completion: "0" };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: [
+      { id: "baidu/ernie:free", pricing: free, architecture: { output_modalities: ["text"] } },
+      { id: "google/lyria-3-pro-preview", pricing: free, architecture: { output_modalities: ["text", "audio"] } },
+      { id: "old/style:free", pricing: free, architecture: { modality: "text->text" } },
+      { id: "paid/model", pricing: { prompt: "0.000001", completion: "0.000002" }, architecture: { output_modalities: ["text"] } },
+    ] })));
+    expect(await listAiModels("k", OPENROUTER_BASE_URL)).toMatchObject({ ok: true, freeModels: ["baidu/ernie:free", "old/style:free"] });
   });
 
   it("explains a spent or rejected key in plain words", async () => {
