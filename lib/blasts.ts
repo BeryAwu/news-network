@@ -81,12 +81,19 @@ function summarize(blast: LoadedBlast, status: BlastStatus): Pick<BlastListItem,
   };
 }
 
-export interface BlastListOptions { from?: Date; to?: Date; /** Only blasts that are live on at least one media (inside the period when from/to are given). */ liveOnly?: boolean }
+export interface BlastListOptions { from?: Date; to?: Date; liveOnly?: boolean; search?: string; status?: string }
 
 export async function listBlasts(userId: string, page = 1, take = 20, opts: BlastListOptions = {}) {
   const wide = await hasNetworkWideScope(userId);
   // A topic saved by the wizard but never started (the second call failed) has no content yet and is not a blast.
   const where: Prisma.SourceBriefWhereInput = { archivedAt: null, OR: [{ contentMode: { not: null } }, { articles: { some: {} } }], ...(wide ? {} : { createdById: userId }) };
+  if (opts.search) {
+    const q = opts.search.trim();
+    where.AND = [{ OR: [{ workingTitle: { contains: q, mode: "insensitive" } }, { narrative: { contains: q, mode: "insensitive" } }] }];
+  }
+  if (opts.status) {
+    where.articles = { some: { status: opts.status as never, archivedAt: null } };
+  }
   if (opts.liveOnly || opts.from || opts.to) {
     const publishedAt = opts.from || opts.to ? { publishedAt: { ...(opts.from ? { gte: opts.from } : {}), ...(opts.to ? { lte: opts.to } : {}) } } : {};
     where.articles = { some: { status: "PUBLISHED", archivedAt: null, ...publishedAt } };

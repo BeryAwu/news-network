@@ -102,6 +102,10 @@
   .bl-fieldset > legend { padding: 0; font-weight: 700; margin-bottom: var(--app-s2); }
   .bl-advanced { display: grid; gap: var(--app-s4); padding-bottom: var(--app-s3); }
 
+  /* Filter bar */
+  .bl-filter { display: flex; flex-wrap: wrap; gap: var(--app-s2); align-items: center; }
+  .bl-filter-search { flex: 1 1 16rem; min-width: 0; }
+
   /* Loading */
   .bl-sk { display: grid; gap: var(--app-s4); }
   .bl-sk .skeleton { height: 128px; }
