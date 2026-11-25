@@ -53,14 +53,16 @@ function sniffImage(bytes: Uint8Array) {
 }
 interface CloudinaryUploadResult { public_id: string; secure_url: string; resource_type: string; format: string; width: number; height: number; bytes: number; etag?: string; version: number }
 async function uploadToCloudinary(file: File, folder: string, publicId: string): Promise<CloudinaryUploadResult> {
-  const { promise, resolve, reject } = Promise.withResolvers<CloudinaryUploadResult>();
-  const upload = cloudinary.uploader.upload_stream({ folder, public_id: publicId, overwrite: false, resource_type: "image", allowed_formats: ["jpg", "png", "webp", "avif"], transformation: [{ width: 2400, height: 2400, crop: "limit" }] }, (error, result) => {
-    if (error) reject(error);
-    else if (!result) reject(new Error("Cloudinary returned no upload metadata."));
-    else resolve(result as CloudinaryUploadResult);
+  const bytes = Buffer.from(await file.arrayBuffer());
+  // Plain Promise on purpose: the production server runs Node 20, which has no Promise.withResolvers.
+  return new Promise<CloudinaryUploadResult>((resolve, reject) => {
+    const upload = cloudinary.uploader.upload_stream({ folder, public_id: publicId, overwrite: false, resource_type: "image", allowed_formats: ["jpg", "png", "webp", "avif"], transformation: [{ width: 2400, height: 2400, crop: "limit" }] }, (error, result) => {
+      if (error) reject(error);
+      else if (!result) reject(new Error("Cloudinary returned no upload metadata."));
+      else resolve(result as CloudinaryUploadResult);
+    });
+    Readable.from([bytes]).pipe(upload);
   });
-  Readable.from([Buffer.from(await file.arrayBuffer())]).pipe(upload);
-  return promise;
 }
 export async function GET() {
   try {

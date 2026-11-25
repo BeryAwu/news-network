@@ -59,21 +59,22 @@ export function parsePage(html: string) {
 }
 interface FetchResult { status: number; headers: IncomingHttpHeaders; body: string }
 async function pinnedGet(url: URL, address: string, family: number, acceptedTypes: string[]): Promise<FetchResult> {
-  const { promise, resolve, reject } = Promise.withResolvers<FetchResult>();
-  const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, { method: "GET", timeout: 8000, headers: { "user-agent": ROBOTS_USER_AGENT, accept: acceptedTypes.join(",") }, lookup: (_hostname, _options, callback) => callback(null, address, family) }, (response) => {
-    const status = response.statusCode ?? 0;
-    if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) { response.resume(); resolve({ status, headers: response.headers, body: "" }); return; }
-    const type = response.headers["content-type"]?.toLowerCase() ?? "";
-    if (!acceptedTypes.some((accepted) => type.includes(accepted))) { response.resume(); resolve({ status, headers: response.headers, body: "" }); return; }
-    const chunks: Buffer[] = []; let bytes = 0;
-    response.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > MAX_BYTES) { request.destroy(new Error("Reference exceeds the 1 MB limit.")); return; } chunks.push(chunk); });
-    response.on("end", () => resolve({ status, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
-    response.on("error", reject);
+  // Plain Promise on purpose: the production server runs Node 20, which has no Promise.withResolvers.
+  return new Promise<FetchResult>((resolve, reject) => {
+    const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, { method: "GET", timeout: 8000, headers: { "user-agent": ROBOTS_USER_AGENT, accept: acceptedTypes.join(",") }, lookup: (_hostname, _options, callback) => callback(null, address, family) }, (response) => {
+      const status = response.statusCode ?? 0;
+      if ([301, 302, 303, 307, 308].includes(status) && response.headers.location) { response.resume(); resolve({ status, headers: response.headers, body: "" }); return; }
+      const type = response.headers["content-type"]?.toLowerCase() ?? "";
+      if (!acceptedTypes.some((accepted) => type.includes(accepted))) { response.resume(); resolve({ status, headers: response.headers, body: "" }); return; }
+      const chunks: Buffer[] = []; let bytes = 0;
+      response.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > MAX_BYTES) { request.destroy(new Error("Reference exceeds the 1 MB limit.")); return; } chunks.push(chunk); });
+      response.on("end", () => resolve({ status, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
+      response.on("error", reject);
+    });
+    request.on("timeout", () => request.destroy(new Error("Reference request timed out.")));
+    request.on("error", reject);
+    request.end();
   });
-  request.on("timeout", () => request.destroy(new Error("Reference request timed out.")));
-  request.on("error", reject);
-  request.end();
-  return promise;
 }
 async function safeRequest(input: URL, acceptedTypes: string[], checkRedirectPolicy?: (url: URL) => Promise<void>) {
   let url = input;
