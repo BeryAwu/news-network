@@ -78,7 +78,7 @@ export async function POST(request: Request) {
     const user = await requireRole("OWNER", "ADMIN", "EDITOR");
     const input = briefInput.parse(await request.json());
     if (!rateLimit(`ingest:${user.id}`, 20, 60 * 1000)) return Response.json({ error: "Terlalu banyak pengambilan sumber. Tunggu sebentar." }, { status: 429 });
-    const targets = await db.mediaSite.findMany({ where: { id: { in: input.mediaSiteIds }, status: { in: ["ACTIVE", "DRAFT"] } }, select: { id: true } });
+    const targets = await db.mediaSite.findMany({ where: { id: { in: input.mediaSiteIds }, deletedAt: null, status: { in: ["ACTIVE", "DRAFT"] } }, select: { id: true } });
     if (targets.length !== new Set(input.mediaSiteIds).size) return Response.json({ error: "One or more media targets are unavailable." }, { status: 400 });
     for (const target of targets) await requireMediaAccess(user.id, target.id);
     const brief = await db.sourceBrief.create({ data: { createdById: user.id, workingTitle: input.workingTitle, narrative: input.narrative, editorNotes: input.editorNotes, mediaTargets: { create: targets.map(({ id }) => ({ mediaSiteId: id })) } }, include: { mediaTargets: true } });

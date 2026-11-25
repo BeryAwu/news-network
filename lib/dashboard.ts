@@ -4,7 +4,7 @@ import { canAccessMedia, hasNetworkWideScope, requireUser } from "@/lib/auth";
 export async function visibleMedia() {
   const user = await requireUser();
   const globalScope = await hasNetworkWideScope(user.id);
-  return db.mediaSite.findMany({ where: globalScope ? {} : { mediaScopes: { some: { userId: user.id } } }, include: { profile: true, domains: true, _count: { select: { articles: true, assets: true } } }, orderBy: { createdAt: "desc" } });
+  return db.mediaSite.findMany({ where: { deletedAt: null, ...(globalScope ? {} : { mediaScopes: { some: { userId: user.id } } }) }, include: { profile: true, domains: true, _count: { select: { articles: true, assets: true } } }, orderBy: { createdAt: "desc" } });
 }
 export async function visibleArticles(options: { mediaSiteId?: string; status?: string; page?: number; limit?: number } = {}) {
   const user = await requireUser();
@@ -71,7 +71,7 @@ export interface DashboardSnapshot {
 
 export async function dashboardSnapshot(userId: string): Promise<DashboardSnapshot> {
   const globalScope = await hasNetworkWideScope(userId);
-  const mediaWhere = globalScope ? {} : { mediaScopes: { some: { userId } } };
+  const mediaWhere = { deletedAt: null, ...(globalScope ? {} : { mediaScopes: { some: { userId } } }) };
   const articleScope = globalScope ? {} : { mediaSite: { mediaScopes: { some: { userId } } } };
   const briefScope = globalScope ? {} : { mediaTargets: { some: { mediaSite: { mediaScopes: { some: { userId } } } } } };
   const targetScope = globalScope ? {} : { mediaSite: { mediaScopes: { some: { userId } } } };

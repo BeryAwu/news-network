@@ -7,6 +7,8 @@ import { PageHeading, StatusBadge } from "@/components/ui";
 import BlastDraftView from "@/components/blast-draft-view";
 import BlastEditForm from "@/components/blast-edit-form";
 import BlastResultView from "@/components/blast-result-view";
+import BlastMediaManager from "@/components/blast-media-manager";
+import BlastDelete from "@/components/blast-delete";
 import { BlastHubSkeleton } from "@/components/blast-skeletons";
 import { OriginalNarrative } from "@/components/blast-preview";
 import { callApi, formatWhen, messageOf, statusInfo } from "@/components/blast-format";
@@ -307,6 +309,22 @@ export default function BlastHub({ id }: { id: string }) {
         </div>
       )}
       {body}
+      {full && detail.canEdit && detail.status !== "GENERATING" && (
+        <BlastMediaManager
+          key={detail.media.map((m) => m.mediaSiteId).join(",")}
+          detail={detail}
+          onChanged={(result, message) => {
+            apply(result.detail);
+            setSkipped(result.skipped);
+            const notLive = result.skipped.map((s) => `${s.mediaName}: ${s.reason}`).join(" ");
+            setFlash(notLive ? `${message} Belum tayang di — ${notLive}` : message);
+            window.scrollTo({ top: 0 });
+          }}
+        />
+      )}
+      {detail.canEdit && detail.status !== "GENERATING" && (
+        <BlastDelete blastId={detail.id} live={detail.media.some((m) => m.publication?.status === "PUBLISHED")} />
+      )}
     </div>
   );
 }

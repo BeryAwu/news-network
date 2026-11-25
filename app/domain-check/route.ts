@@ -10,6 +10,6 @@ export async function GET(request: Request) {
   if (!raw) return new Response("missing domain", { status: 400 });
   let hostname: string;
   try { hostname = normalizeHostname(raw); } catch { return new Response("invalid domain", { status: 400 }); }
-  const known = await db.domain.findFirst({ where: { hostname, isActive: true, verificationStatus: "VERIFIED", mediaSite: { status: "ACTIVE" } }, select: { id: true } });
+  const known = await db.domain.findFirst({ where: { hostname, isActive: true, verificationStatus: "VERIFIED", mediaSite: { status: "ACTIVE", deletedAt: null } }, select: { id: true } });
   return new Response(known ? "ok" : "unknown domain", { status: known ? 200 : 404 });
 }

@@ -9,6 +9,7 @@ import DomainForm from "@/components/domain-actions";
 import MediaEditForm from "@/components/media-edit-form";
 import CategoryManager from "@/components/category-manager";
 import WritingSkillsToggle from "@/components/writing-skills-toggle";
+import MediaDelete from "@/components/media-delete";
 import { db } from "@/lib/db";
 import "@/app/css/media.css";
 
@@ -50,7 +51,7 @@ function SetupTracker({ siteId, steps }: { siteId: string; steps: Step[] }) {
   </ol>;
 }
 
-export default async function MediaPage({ searchParams }: { searchParams: Promise<{ site?: string; tab?: string; baru?: string }> }) {
+export default async function MediaPage({ searchParams }: { searchParams: Promise<{ site?: string; tab?: string; baru?: string; dihapus?: string }> }) {
   const [media, user, query] = await Promise.all([visibleMedia(), requireUser(), searchParams]);
   const elevated = await hasNetworkWideScope(user.id);
   const canEditCategories = user.roles.some((assignment) => ["OWNER", "ADMIN", "EDITOR"].includes(assignment.role));
@@ -103,6 +104,8 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
         {active === "kategori" && <CategoryManager mediaSiteId={selected.id} categories={categories} editable={canEditCategories} />}
         {active === "gaya" && <WritingSkillsToggle mediaSiteId={selected.id} />}
       </section>
+
+      {elevated && <MediaDelete mediaSiteId={selected.id} name={selected.displayName} articleCount={selected._count.articles} />}
     </>;
   }
 
@@ -113,6 +116,8 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
       subtitle="Setiap media punya langkah penyiapan sendiri. Selesaikan ketiganya supaya naskah bisa terbit."
       action={elevated && !showForm ? <Link className="btn btn-primary" href="/media?baru=1"><Plus size={18} aria-hidden="true" />Tambah media</Link> : undefined}
     />
+
+    {query.dihapus === "1" && <div role="status" className="notice notice-success"><Check size={18} aria-hidden="true" /><span>Media dihapus. Berita di media itu sudah dicabut dan alamat situsnya berhenti melayani.</span></div>}
 
     {showForm && <section aria-label="Tambah media baru" className="stack">
       <MediaForm />

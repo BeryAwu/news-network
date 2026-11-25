@@ -68,6 +68,24 @@ export interface BlastDetail {
   links: BlastLink[];
   canEdit: boolean;
   canPublish: boolean;
+  /** Every media this user may send the berita to, for the "Media tujuan" checklist. */
+  availableMedia: BlastMediaOption[];
+}
+
+export interface BlastMediaOption {
+  id: string;
+  name: string;
+  /** Confirmed public address, or null when the media cannot publish yet. */
+  hostname: string | null;
+}
+
+/** PUT /api/blasts/[id]/media result: the fresh detail plus what changed. */
+export interface BlastMediaChange {
+  detail: BlastDetail;
+  added: number;
+  removed: number;
+  /** Newly added media that could not go live right away, with the reason. */
+  skipped: { mediaName: string; reason: string }[];
 }
 
 export interface BlastListItem {

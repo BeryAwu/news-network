@@ -8,7 +8,7 @@ import { failStaleGenerationRuns } from "@/lib/generation";
 import { plainPublishError } from "@/lib/publish-reasons";
 import { aiConfiguration, DraftEvidenceValidationError, generateDraft, IntegrationNotConfigured, plainAiFailure, PROMPT_VERSION } from "@/lib/ai";
 import type { Prisma, VersionChange } from "@prisma/client";
-import type { BlastAsset, BlastContent, BlastDetail, BlastDraftPreview, BlastEditInput, BlastLink, BlastListItem, BlastMedia, BlastMode, BlastStatus, PublicationState } from "@/lib/blast-types";
+import type { BlastAsset, BlastContent, BlastDetail, BlastDraftPreview, BlastEditInput, BlastLink, BlastListItem, BlastMedia, BlastMediaChange, BlastMode, BlastStatus, PublicationState } from "@/lib/blast-types";
 
 type User = { id: string; name: string; roles: { role: string }[] };
 
@@ -40,7 +40,8 @@ const blastInclude = {
 export type LoadedBlast = Prisma.SourceBriefGetPayload<{ include: typeof blastInclude }>;
 
 async function loadBlast(id: string): Promise<LoadedBlast | null> {
-  return db.sourceBrief.findUnique({ where: { id }, include: blastInclude });
+  // A deleted berita (archivedAt set) is gone: every screen and action treats it as not found.
+  return db.sourceBrief.findFirst({ where: { id, archivedAt: null }, include: blastInclude });
 }
 
 /** Creator, or OWNER/ADMIN. Anyone else gets a 404 so ids do not leak. */
@@ -159,11 +160,17 @@ export async function getBlastDetail(user: User, id: string): Promise<BlastDetai
   const links: BlastLink[] = media.flatMap((m) => (m.publication?.status === "PUBLISHED" && m.publication.url ? [{ mediaName: m.name, title: content?.title ?? blast.workingTitle, url: m.publication.url }] : []));
   const wide = await hasNetworkWideScope(user.id);
   const generation = fresh ? { state: (fresh.status === "SUCCEEDED" ? "DONE" : fresh.status) as "PENDING" | "FAILED" | "DONE", error: fresh.status === "FAILED" ? plainAiFailure(fresh.errorMessage) : null } : null;
+  const options = await db.mediaSite.findMany({
+    where: { deletedAt: null, status: { not: "DISABLED" }, ...(wide ? {} : { mediaScopes: { some: { userId: user.id } } }) },
+    orderBy: { displayName: "asc" },
+    select: { id: true, displayName: true, domains: { where: { isActive: true, verificationStatus: "VERIFIED" }, orderBy: [{ isCanonical: "desc" }, { createdAt: "asc" }], select: { hostname: true }, take: 1 } },
+  });
   return {
     id: blast.id, status, mode: (blast.contentMode as BlastMode | null) ?? null, createdAt: blast.createdAt.toISOString(), author: blast.createdBy,
     originalNarrative: blast.narrative, content, generation, media, links,
     canEdit: Boolean(blast.contentMode) && (blast.createdById === user.id || wide),
     canPublish: Boolean(blast.contentMode) && canPublishRole(user),
+    availableMedia: options.map((o) => ({ id: o.id, name: o.displayName, hostname: o.domains[0]?.hostname ?? null })),
   };
 }
 
@@ -457,6 +464,88 @@ export async function unpublishBlast(user: User, id: string) {
     }
   });
   return getBlastDetail(user, id);
+}
+
+/** Takes every live or waiting copy of these articles off the public sites and archives them. Runs inside a transaction. */
+async function withdrawAndArchive(tx: Prisma.TransactionClient, user: User, articles: { id: string; mediaSiteId: string }[], reason: string) {
+  const now = new Date();
+  for (const article of articles) {
+    const live = await tx.publicationTarget.updateMany({
+      where: { articleId: article.id, status: { in: ["PUBLISHED", "QUEUED", "SCHEDULED", "PUBLISHING", "FAILED"] } },
+      data: { status: "CANCELLED", lastErrorCode: "REMOVED", lastErrorMessage: `${reason} oleh ${user.name}.` },
+    });
+    await tx.article.update({ where: { id: article.id }, data: { archivedAt: now, status: "ARCHIVED", publishedAt: null } });
+    await tx.auditLog.create({ data: { actorUserId: user.id, mediaSiteId: article.mediaSiteId, action: "ARTICLE_REMOVED", entityType: "Article", entityId: article.id, metadata: { via: "blast", reason, withdrawn: live.count } } });
+  }
+}
+
+/**
+ * Sets which media carry the berita. Unchecked media lose it: the story is taken off their site and archived.
+ * Newly checked media get the current text; if the berita is already live elsewhere it goes live there too.
+ * A media removed earlier and checked again gets its old article back (same address), updated to the current text.
+ */
+export async function setBlastMedia(user: User, id: string, mediaSiteIds: string[]): Promise<BlastMediaChange> {
+  const blast = await loadBlast(id);
+  if (!blast) throw new BlastError("Berita tidak ditemukan.", 404);
+  await assertCanSee(user, blast);
+  if (!blast.contentMode) throw new BlastError("Berita lama ini tidak bisa diatur dari layar ini.", 409);
+  if (blast.createdById !== user.id && !(await hasNetworkWideScope(user.id))) throw new AuthError("Hanya pengarang, admin, atau pemilik yang boleh mengatur media berita ini.", 403);
+  const source = blast.articles[0];
+  if (!source) throw new BlastError("Isi berita belum siap. Tunggu sampai beritanya selesai ditulis.", 409);
+  const next = [...new Set(mediaSiteIds)];
+  if (!next.length) throw new BlastError("Pilih minimal satu media. Untuk menghapus berita dari semua media, pakai Hapus berita.", 400);
+  for (const mid of next) await requireMediaAccess(user.id, mid);
+
+  const current = blast.mediaTargets.map((t) => t.mediaSiteId);
+  const added = next.filter((mid) => !current.includes(mid));
+  const removed = current.filter((mid) => !next.includes(mid));
+  const removedArticles = blast.articles.filter((a) => removed.includes(a.mediaSiteId));
+  if (removedArticles.some((a) => a.status === "PUBLISHED") && !canPublishRole(user)) throw new AuthError("Peran Anda tidak boleh menarik berita yang sudah terbit.", 403);
+  const wasLive = blast.articles.some((a) => a.status === "PUBLISHED" && !removed.includes(a.mediaSiteId));
+  const keep = blast.articles.find((a) => !removed.includes(a.mediaSiteId)) ?? source;
+  const categoryName = keep.categoryId ? (await db.category.findUnique({ where: { id: keep.categoryId }, select: { name: true } }))?.name : undefined;
+  const newSites = added.length ? await db.mediaSite.findMany({ where: { id: { in: added }, deletedAt: null }, select: { id: true, categories: { where: { isActive: true }, select: { id: true, name: true } } } }) : [];
+
+  await db.$transaction(async (tx) => {
+    await withdrawAndArchive(tx, user, removedArticles, "Media dilepas dari berita");
+    if (removed.length) await tx.sourceBriefMedia.deleteMany({ where: { sourceBriefId: blast.id, mediaSiteId: { in: removed } } });
+
+    const fresh: typeof newSites = [];
+    for (const site of newSites) {
+      await tx.sourceBriefMedia.create({ data: { sourceBriefId: blast.id, mediaSiteId: site.id } });
+      const old = await tx.article.findFirst({ where: { sourceBriefId: blast.id, mediaSiteId: site.id, archivedAt: { not: null } }, orderBy: { updatedAt: "desc" } });
+      if (!old) { fresh.push(site); continue; }
+      const fields = { title: keep.title, excerpt: keep.excerpt, body: keep.body, seoTitle: keep.seoTitle, metaDescription: keep.metaDescription, tags: keep.tags, featuredAssetId: keep.featuredAssetId, galleryAssetIds: keep.galleryAssetIds };
+      await tx.article.update({ where: { id: old.id }, data: { ...fields, archivedAt: null, status: "NEEDS_REVIEW", approvedAt: null, approvedById: null, versionNumber: { increment: 1 } } });
+      await tx.articleVersion.create({ data: { ...fields, articleId: old.id, versionNumber: old.versionNumber + 1, slug: old.slug, imageBrief: keep.imageBrief, categoryId: old.categoryId, claimsUsed: keep.claimsUsed as Prisma.InputJsonValue, uncertainties: keep.uncertainties as Prisma.InputJsonValue, changeType: "MANUAL_EDIT", changeSummary: "Media dipasang lagi ke berita.", createdById: user.id } });
+    }
+    // The writer of the berita stays the author on every media, so "from the same writer" lists stay correct.
+    await createSharedArticles(tx, { id: blast.id, featuredAssetId: keep.featuredAssetId, galleryAssetIds: keep.galleryAssetIds }, fresh,
+      { title: keep.title, excerpt: keep.excerpt, body: keep.body, seoTitle: keep.seoTitle, metaDescription: keep.metaDescription, tags: keep.tags, imageBrief: keep.imageBrief, claimsUsed: keep.claimsUsed, uncertainties: keep.uncertainties, suggestedCategory: categoryName },
+      blast.createdById, { changeType: "MANUAL_EDIT", summary: "Media ditambahkan ke berita." });
+    await tx.auditLog.create({ data: { actorUserId: user.id, action: "BLAST_MEDIA_CHANGED", entityType: "SourceBrief", entityId: blast.id, metadata: { added, removed } } });
+  });
+
+  let skipped: SkippedMedia[] = [];
+  if (added.length && wasLive) {
+    if (canPublishRole(user)) skipped = (await publishBlast(user, id, null)).skipped;
+    else skipped = [{ mediaName: "Media baru", reason: "Peran Anda tidak boleh menerbitkan. Minta admin menekan Terbitkan." }];
+  }
+  return { detail: await getBlastDetail(user, id), added: added.length, removed: removed.length, skipped };
+}
+
+/** Deletes a berita: takes it off every media, then hides it from the list. Versions and the audit trail stay. */
+export async function deleteBlast(user: User, id: string) {
+  const blast = await loadBlast(id);
+  if (!blast) throw new BlastError("Berita tidak ditemukan.", 404);
+  await assertCanSee(user, blast);
+  if (blast.createdById !== user.id && !(await hasNetworkWideScope(user.id))) throw new AuthError("Hanya pengarang, admin, atau pemilik yang boleh menghapus berita ini.", 403);
+  if (blast.articles.some((a) => a.status === "PUBLISHED") && !canPublishRole(user)) throw new AuthError("Berita ini sudah terbit. Peran Anda tidak boleh menariknya, jadi minta admin yang menghapus.", 403);
+  await db.$transaction(async (tx) => {
+    await withdrawAndArchive(tx, user, blast.articles, "Berita dihapus");
+    await tx.sourceBrief.update({ where: { id: blast.id }, data: { archivedAt: new Date() } });
+    await tx.auditLog.create({ data: { actorUserId: user.id, action: "BLAST_DELETED", entityType: "SourceBrief", entityId: blast.id, metadata: { articles: blast.articles.length } } });
+  });
 }
 
 /**

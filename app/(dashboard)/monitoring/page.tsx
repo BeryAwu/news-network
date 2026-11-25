@@ -21,7 +21,7 @@ async function load(userId: string, isOwner: boolean) {
   const mediaWhere = isOwner ? {} : { mediaScopes: { some: { userId } } };
   const targetWhere = isOwner ? {} : { mediaSite: { mediaScopes: { some: { userId } } } };
   const now = Date.now();
-  const sites = await db.mediaSite.findMany({ where: mediaWhere, include: { domains: true }, orderBy: { displayName: "asc" }, take: 200 });
+  const sites = await db.mediaSite.findMany({ where: { ...mediaWhere, deletedAt: null }, include: { domains: true }, orderBy: { displayName: "asc" }, take: 200 });
   const runWhere = { operation: "GENERATE_ARTICLE" as const, ...(isOwner ? {} : { mediaSiteId: { in: sites.map((site) => site.id) } }) };
   const [failedTargets, failedTargetCount, publishedRows, failedRuns, runs24, overdue, waitingScheduled, latestAsset] = await Promise.all([
     db.publicationTarget.findMany({ where: { ...targetWhere, status: "FAILED" }, include: { article: { select: { title: true } }, mediaSite: { select: { displayName: true } }, domain: { select: { hostname: true } } }, orderBy: { updatedAt: "desc" }, take: 8 }),

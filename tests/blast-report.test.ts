@@ -16,7 +16,7 @@ function detail(overrides: Partial<BlastDetail> = {}): BlastDetail {
       { mediaSiteId: "m2", name: "Liputan 77", articleId: "a2", articleStatus: "PUBLISHED", hostname: "b.test", canPublish: true, problem: null, publication: { status: "PUBLISHED", url: "https://b.test/articles/patroli", error: null, publishedAt: "2026-11-08T02:00:00.000Z" } },
     ],
     links: [{ mediaName: "Kabar Tangsel", title: "Patroli Malam di Bintaro", url: "https://a.test/articles/patroli" }, { mediaName: "Liputan 77", title: "Patroli Malam di Bintaro", url: "https://b.test/articles/patroli" }],
-    canEdit: true, canPublish: true, ...overrides,
+    canEdit: true, canPublish: true, availableMedia: [], ...overrides,
   };
 }
 

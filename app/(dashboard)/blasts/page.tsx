@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, CircleAlert, PenLine } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleAlert, CircleCheck, PenLine } from "lucide-react";
 import { EmptyState, PageHeading } from "@/components/ui";
 import { formatWhen, legacyStatusInfo, statusInfo } from "@/components/blast-format";
 import { requireUser } from "@/lib/auth";
@@ -63,6 +63,12 @@ export default async function BlastsPage({ searchParams }: { searchParams: Promi
   return (
     <>
       <PageHeading title="Daftar berita" subtitle="Semua berita yang pernah Anda tulis. Buka satu berita untuk memeriksa, menerbitkan, atau mengambil link-nya." action={<div className="bl-head-actions">{switcher}{write}</div>} />
+      {query.dihapus === "1" && (
+        <div role="status" className="notice notice-success">
+          <CircleCheck size={18} aria-hidden="true" />
+          <span>Berita dihapus dan sudah dicabut dari semua media.</span>
+        </div>
+      )}
 
       {!data ? (
         <div role="alert" className="notice notice-error">

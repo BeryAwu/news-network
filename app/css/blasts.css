@@ -67,6 +67,20 @@
   .bl-reason { display: flex; align-items: flex-start; gap: var(--app-s2); flex-wrap: wrap; font-size: var(--app-text-sm); color: var(--app-ink-2); }
   .bl-reason a { font-weight: 700; }
 
+  /* Media tujuan checklist */
+  .bl-targets h2, .bl-danger h2 { display: flex; align-items: center; gap: var(--app-s2); }
+  .bl-targets-list { display: grid; gap: var(--app-s2); margin: 0; padding: 0; border: 0; min-width: 0; }
+  .bl-target { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--app-s3); padding: var(--app-s3) var(--app-s4); border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); cursor: pointer; }
+  .bl-target > span:not(.badge) { display: grid; gap: 2px; min-width: 0; }
+  .bl-target small { color: var(--app-muted); font-size: var(--app-text-sm); overflow-wrap: anywhere; }
+  .bl-target input { width: 20px; height: 20px; accent-color: var(--app-ink); }
+  .bl-target:has(input:focus-visible) { outline: 3px solid var(--app-focus); outline-offset: 2px; }
+  .bl-target-all { background: var(--app-surface-2); }
+  .bl-target.is-pending { border-color: var(--app-ink-2); }
+  .bl-targets-list:disabled .bl-target { cursor: default; opacity: 0.7; }
+  .bl-actions .muted { display: inline-flex; align-items: center; gap: var(--app-s1); }
+  .bl-danger { border-color: color-mix(in oklab, var(--app-danger) 30%, var(--app-line)); }
+
   /* Actions and panels */
   .bl-actions { display: flex; align-items: center; gap: var(--app-s3); flex-wrap: wrap; }
   .bl-panel { align-items: flex-start; }

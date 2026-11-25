@@ -52,7 +52,7 @@ export function listNames(items: string[]) {
 }
 
 interface CallOptions {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
   signal?: AbortSignal;
   /** API field name to the sentence shown when that field is rejected. */

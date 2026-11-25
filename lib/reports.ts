@@ -22,7 +22,7 @@ export interface PublishedRow {
 export interface ReportRange { from?: Date; to?: Date }
 
 async function visibleMediaWhere(userId: string) {
-  return (await hasNetworkWideScope(userId)) ? {} : { mediaScopes: { some: { userId } } };
+  return { deletedAt: null, ...((await hasNetworkWideScope(userId)) ? {} : { mediaScopes: { some: { userId } } }) };
 }
 
 /** Parses YYYY-MM-DD as a whole Asia/Jakarta day; `end` makes it the last millisecond of that day. */

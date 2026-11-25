@@ -65,7 +65,7 @@ export async function resolveSite(): Promise<Site> {
   const hostname = await requestHostname();
   if (!hostname) notFound();
   const domain = await db.domain.findFirst({
-    where: { hostname, isActive: true, verificationStatus: "VERIFIED", mediaSite: { status: "ACTIVE" } },
+    where: { hostname, isActive: true, verificationStatus: "VERIFIED", mediaSite: { status: "ACTIVE", deletedAt: null } },
     include: { mediaSite: { include: { profile: true, categories: { where: { isActive: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }] } } } },
   });
   if (!domain) notFound();

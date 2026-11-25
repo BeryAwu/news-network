@@ -18,7 +18,7 @@ export default async function UsersPage() {
   const viewerIsOwner = viewer.roles.some((assignment) => assignment.role === "OWNER");
   const [users, mediaRows] = await Promise.all([
     db.user.findMany({ include: { roles: true, mediaScopes: { select: { mediaSiteId: true } } }, orderBy: { createdAt: "desc" }, take: 200 }),
-    db.mediaSite.findMany({ select: { id: true, displayName: true, domains: { select: { hostname: true, isCanonical: true, isActive: true }, orderBy: [{ isCanonical: "desc" }, { createdAt: "asc" }] } }, orderBy: { displayName: "asc" } }),
+    db.mediaSite.findMany({ where: { deletedAt: null }, select: { id: true, displayName: true, domains: { select: { hostname: true, isCanonical: true, isActive: true }, orderBy: [{ isCanonical: "desc" }, { createdAt: "asc" }] } }, orderBy: { displayName: "asc" } }),
   ]);
   const media = mediaRows.map((item) => ({ id: item.id, displayName: item.displayName, address: (item.domains.find((domain) => domain.isActive) || item.domains[0])?.hostname || "" }));
 

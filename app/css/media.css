@@ -26,6 +26,8 @@
   /* Detail view */
   .media-tabs { max-width: 100%; }
   .media-panel { display: grid; gap: var(--app-s5); align-content: start; }
+  .media-danger { border-color: color-mix(in oklab, var(--app-danger) 30%, var(--app-line)); }
+  .media-danger .field { max-width: 26rem; }
   .media-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--app-s3) var(--app-s5); margin: 0; }
   .media-summary div { display: grid; gap: 2px; min-width: 0; }
   .media-summary dt { color: var(--app-muted); font-size: var(--app-text-sm); font-weight: 600; }

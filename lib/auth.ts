@@ -61,6 +61,8 @@ export async function hasNetworkWideScope(userId: string) {
   return Boolean(global);
 }
 export async function canAccessMedia(userId: string, mediaSiteId: string) {
+  // A deleted media is gone for everyone, owners included.
+  if (!(await db.mediaSite.findFirst({ where: { id: mediaSiteId, deletedAt: null }, select: { id: true } }))) return false;
   if (await hasNetworkWideScope(userId)) return true;
   const scoped = await db.mediaAccess.findUnique({ where: { userId_mediaSiteId: { userId, mediaSiteId } } });
   return Boolean(scoped);
